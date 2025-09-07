@@ -1,0 +1,22 @@
+name: Rename File on Push
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  rename-file:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v2
+
+      - name: Rename file
+        run: mv "少年你相信光吗" _worker.js
+
+      - name: Commit and push changes
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "Automated: Renamed file to _worker.js"
+          branch: main
