@@ -2,15 +2,15 @@ import { connect } from 'cloudflare:sockets';
 
 // --- 硬编码配置 ---
 // UUID，同时用作订阅路径。
-const authToken = '351c9981-04b6-4103-aa4b-864aa9c91469';
+const authToken = 'e258977b-e413-4718-a3af-02d75492c349';
 // 用来访问cloudflare托管的网站
-const fallbackAddress = 'ProxyIP.cmliussss.net';
-const fallbackPort = '443';
+const fallbackAddress = 'www.shopify.com';
+const fallbackPort = '8443';
 // SOCKS5 代理配置。留空则禁用。格式: user:pass@host:port
 const socks5Config = '';
 
 const directDomains = [
-    { name: "cloudflare.182682.xyz", domain: "cloudflare.182682.xyz" }, { name: "speed.marisalnc.com", domain: "speed.marisalnc.com" },
+    { name: "www.shopify.com", domain: "www.shopify.com" }, { name: "speed.marisalnc.com", domain: "speed.marisalnc.com" },
     { domain: "freeyx.cloudflare88.eu.org" }, { domain: "bestcf.top" }, { domain: "cdn.2020111.xyz" }, { domain: "cfip.cfcdn.vip" },
     { domain: "cf.0sm.com" }, { domain: "cf.090227.xyz" }, { domain: "cf.zhetengsha.eu.org" }, { domain: "cloudflare.9jy.cc" },
     { domain: "cf.zerone-cdn.pp.ua" }, { domain: "cfip.1323123.xyz" }, { domain: "cnamefuckxxs.yuchen.icu" }, { domain: "cloudflare-ip.mofashi.ltd" },
