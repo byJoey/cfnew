@@ -10,6 +10,9 @@ const fallbackPort = '443';
 // SOCKS5 代理配置。留空则禁用。格式: user:pass@host:port
 const socks5Config = '';
 
+// 随机生成num个节点
+const num = 30;
+
 
 const directDomains = [
     { name: "cloudflare.182682.xyz", domain: "cloudflare.182682.xyz" }, { name: "speed.marisalnc.com", domain: "speed.marisalnc.com" },
@@ -66,9 +69,22 @@ export default {
 	},
 };
 
+function getRandomNodes(arr, num) {
+    const count = Math.min(num, arr.length);
+  
+    // 1. 创建数组的副本，避免修改原数组
+    const shuffled = [...arr]; 
+  
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1)); 
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled.slice(0, count);
+}
+
 async function handleSubscriptionRequest(request, uuid) {
     const url = new URL(request.url);
-    const finalLinks = [];
+    let finalLinks = [];
     const workerDomain = url.hostname;
 
     const nativeList = [{ ip: workerDomain, isp: '原生地址' }];
@@ -93,6 +109,8 @@ async function handleSubscriptionRequest(request, uuid) {
         finalLinks.push(errorLink);
     }
 
+    finalLinks = getRandomNodes(finalLinks, num);
+
     const subscriptionContent = btoa(finalLinks.join('\n'));
     
     return new Response(subscriptionContent, {
@@ -107,7 +125,7 @@ function generateLinksFromSource(list, uuid, workerDomain) {
     const httpsPorts = [443];
     const httpPorts = [80];
     const links = [];
-    const wsPath = encodeURIComponent('/?ed=2048');
+    const wsPath = '/?ed=2048';
     const proto = 'vless';
 
     list.forEach(item => {
@@ -265,7 +283,7 @@ async function fetchAndParseNewIPs() {
 
 function generateLinksFromNewIPs(list, uuid, workerDomain) {
     const links = [];
-    const wsPath = encodeURIComponent('/?ed=2048');
+    const wsPath = '/?ed=2048';
     const proto = 'vless';
 
     list.forEach(item => {
