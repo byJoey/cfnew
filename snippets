@@ -104,7 +104,7 @@ async function handleSubscriptionRequest(request, uuid) {
 
 function generateLinksFromSource(list, uuid, workerDomain) {
     const httpsPorts = [443];
-    const httpPorts = [80];
+    const httpPorts = [];
     const links = [];
     const wsPath = encodeURIComponent('/?ed=2048');
     const proto = 'vless';
