@@ -12,12 +12,11 @@ const socks5Config = '';
 
 
 const directDomains = [
-    { name: "cloudflare.182682.xyz", domain: "cloudflare.182682.xyz" }, { name: "speed.marisalnc.com", domain: "speed.marisalnc.com" }, { name: "www.shopify.com", domain: "www.shopify.com" }, { name: "www.udacity.com", domain: "www.udacity.com" },
+    { name: "cloudflare.182682.xyz", domain: "cloudflare.182682.xyz" }, { name: "www.shopify.com", domain: "www.shopify.com" }, { name: "www.udacity.com", domain: "www.udacity.com" },
     { domain: "freeyx.cloudflare88.eu.org" }, { domain: "bestcf.top" }, { domain: "cdn.2020111.xyz" }, { domain: "cfip.cfcdn.vip" },
     { domain: "cf.0sm.com" }, { domain: "cf.090227.xyz" }, { domain: "cf.zhetengsha.eu.org" }, { domain: "cloudflare.9jy.cc" },
     { domain: "cf.zerone-cdn.pp.ua" }, { domain: "cfip.1323123.xyz" }, { domain: "cnamefuckxxs.yuchen.icu" }, { domain: "cloudflare-ip.mofashi.ltd" },
-    { domain: "115155.xyz" }, { domain: "cname.xirancdn.us" }, { domain: "f3058171cad.002404.xyz" }, { domain: "8.889288.xyz" },
-    { domain: "cdn.tzpro.xyz" }, { domain: "cf.877771.xyz" }, { domain: "xn--b6gac.eu.org" }
+    { domain: "cdn.tzpro.xyz" }, { domain: "xn--b6gac.eu.org" }
 ];
 
 
@@ -159,7 +158,7 @@ async function fetchDynamicIPs() {
     }
 
     console.log("[Wetest] wetest.vip failed, trying fallback IP source...");
-    const fallbackUrl = "https://stock.hostmonit.com/CloudFlareYes";
+    const fallbackUrl = "备用订阅IP地址";
     try {
         const response = await fetch(fallbackUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
         if (!response.ok) {
@@ -228,7 +227,7 @@ async function fetchAndParseWetest(url) {
 }
 
 async function fetchAndParseNewIPs() {
-    const url = "https://raw.githubusercontent.com/qwer-search/bestip/refs/heads/main/kejilandbestip.txt";
+    const url = "https://ccq.xmma.top/heads/main/transformed_result.csv?token=CCQ";
     let results = [];
     try {
         const response = await fetch(url);
