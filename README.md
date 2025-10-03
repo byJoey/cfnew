@@ -27,7 +27,24 @@
 | `u` | `你的 UUID` | **必需**。 |
 | `p` | `proxyip` | **可选**但强烈推荐，填写一个稳定的用来访问 Cloudflare IP 可以用 ProxyIP.cmliussss.net CM提供的公益项目 在次感谢。 |
 | `s` | `你的SOCKS5地址` | **可选**。用于将所有出站流量通过 SOCKS5 代理转发，格式为 `user:pass@host:port` 或 `host:port`。 |
-| `d` | `你的订阅地址` | **可选**。不填就是/你的uuid
+| `d` | `你的订阅地址` | **可选**。不填就是/你的uuid |
+| `yx` | `自定义优选IP/域名` | **可选**。自定义优选IP和域名，支持端口，格式：`1.1.1.1:8080,2.2.2.2,example.com:8443`。当设置此变量时，将只使用原生地址和自定义优选，不生成默认优选。 |
+| `qj` | `no` | **可选**。SOCKS5降级控制，设置为`no`时启用降级模式：SOCKS5失败→fallback SOCKS5→直连fallback。 |
+
+###  新功能
+
+#### 自定义优选支持
+- 支持自定义优选IP和域名，完全替代默认优选
+- 格式：`yx=1.1.1.1:8080,2.2.2.2,example.com:8443`
+- 支持IPv4/IPv6地址和域名，支持自定义端口
+- 设置后只生成原生地址+自定义优选，跳过默认优选
+
+#### SOCKS5智能降级
+- 当SOCKS5代理不可用时自动降级
+- 设置：`qj=no` 启用降级模式
+- 降级流程：SOCKS5连接 → fallback SOCKS5 → 直连fallback
+- 提高连接成功率，增强容错能力
+
 ###  致谢
 
   * 本项目基于 [zizifn/edgetunnel](https://github.com/zizifn/edgetunnel) 修改，感谢原作者的贡献。
