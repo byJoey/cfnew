@@ -1785,42 +1785,74 @@ async function handleSubscriptionPage(request, user = null) {
         
         // 配置管理相关函数
         async function checkKVStatus() {
+            const apiUrl = window.location.pathname + '/api/config';
+            console.log('🔍 调试信息 - 检查KV状态');
+            console.log('请求URL:', apiUrl);
+            
             try {
-                const response = await fetch(window.location.pathname + '/api/config');
+                const response = await fetch(apiUrl);
+                console.log('响应状态:', response.status);
+                console.log('响应头:', Object.fromEntries(response.headers.entries()));
+                
                 if (response.status === 503) {
                     // KV未配置
+                    console.log('❌ KV存储未配置 (503)');
                     document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">⚠️ KV存储未启用或未配置</span>';
                     document.getElementById('configCard').style.display = 'block';
+                    document.getElementById('currentConfig').textContent = 'KV存储未配置，无法使用配置管理功能。\\n\\n请在Cloudflare Workers中:\\n1. 创建KV命名空间\\n2. 绑定环境变量 KV_CONFIG\\n3. 重新部署代码';
                 } else if (response.ok) {
                     const data = await response.json();
+                    console.log('响应数据:', data);
+                    console.log('kvEnabled:', data.kvEnabled);
+                    
                     // 检查响应是否包含KV配置信息
                     if (data && data.kvEnabled === true) {
+                        console.log('✅ KV存储已启用');
                         document.getElementById('kvStatus').innerHTML = '<span style="color: #44ff44;">✅ KV存储已启用，可以使用配置管理功能</span>';
                         document.getElementById('configContent').style.display = 'block';
                         document.getElementById('configCard').style.display = 'block';
                         await loadCurrentConfig();
                     } else {
+                        console.log('❌ KV存储未启用 (响应中kvEnabled不为true)');
                         document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">⚠️ KV存储未启用或未配置</span>';
                         document.getElementById('configCard').style.display = 'block';
+                        document.getElementById('currentConfig').textContent = 'KV存储未配置';
                     }
                 } else {
+                    console.log('❌ 响应错误:', response.status, response.statusText);
                     document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">⚠️ KV存储未启用或未配置</span>';
                     document.getElementById('configCard').style.display = 'block';
+                    document.getElementById('currentConfig').textContent = 'KV存储检测失败 - 状态码: ' + response.status;
                 }
             } catch (error) {
+                console.log('❌ 请求失败:', error);
                 document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">⚠️ KV存储未启用或未配置</span>';
                 document.getElementById('configCard').style.display = 'block';
+                document.getElementById('currentConfig').textContent = 'KV存储检测失败 - 错误: ' + error.message;
             }
         }
         
         async function loadCurrentConfig() {
+            const apiUrl = window.location.pathname + '/api/config';
+            console.log('📥 调试信息 - 加载配置');
+            console.log('请求URL:', apiUrl);
+            
             try {
-                const response = await fetch(window.location.pathname + '/api/config');
+                const response = await fetch(apiUrl);
+                console.log('加载响应状态:', response.status);
+                
+                if (response.status === 503) {
+                    console.log('❌ KV存储未配置，无法加载配置');
+                    document.getElementById('currentConfig').textContent = 'KV存储未配置，无法加载配置';
+                    return;
+                }
                 if (!response.ok) {
-                    document.getElementById('currentConfig').textContent = 'KV存储未启用';
+                    console.log('❌ 加载配置失败，状态码:', response.status);
+                    document.getElementById('currentConfig').textContent = '加载配置失败';
                     return;
                 }
                 const config = await response.json();
+                console.log('加载的配置数据:', config);
                 
                 // 过滤掉内部字段 kvEnabled
                 const displayConfig = {};
@@ -1853,20 +1885,40 @@ async function handleSubscriptionPage(request, user = null) {
         }
         
         async function saveConfig(configData) {
+            const apiUrl = window.location.pathname + '/api/config';
+            console.log('💾 调试信息 - 保存配置');
+            console.log('请求URL:', apiUrl);
+            console.log('配置数据:', configData);
+            
             try {
-                const response = await fetch(window.location.pathname + '/api/config', {
+                const response = await fetch(apiUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(configData)
                 });
                 
+                console.log('保存响应状态:', response.status);
+                console.log('保存响应头:', Object.fromEntries(response.headers.entries()));
+                
+                if (response.status === 503) {
+                    console.log('❌ KV存储未配置，无法保存');
+                    showStatus('KV存储未配置，无法保存配置。请先在Cloudflare Workers中配置KV存储。', 'error');
+                    return;
+                }
+                
                 const result = await response.json();
+                console.log('保存响应数据:', result);
+                
                 showStatus(result.message, result.success ? 'success' : 'error');
                 
                 if (result.success) {
+                    console.log('✅ 保存成功，重新加载配置');
                     await loadCurrentConfig();
+                } else {
+                    console.log('❌ 保存失败:', result.message);
                 }
             } catch (error) {
+                console.log('❌ 保存请求失败:', error);
                 showStatus('保存失败: ' + error.message, 'error');
             }
         }
