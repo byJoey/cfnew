@@ -1536,18 +1536,58 @@ async function handleSubscriptionPage(request, user = null) {
                 </form>
                 <form id="otherConfigForm" style="margin-bottom: 20px;">
                     <div style="margin-bottom: 15px;">
-                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">自定义IP (p):</label>
+                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">自定义ProxyIP (p):</label>
                         <input type="text" id="customIP" placeholder="例如: 1.2.3.4:443" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                        <small style="color: #00aa00; font-size: 0.85rem;">自定义ProxyIP地址和端口</small>
                     </div>
                     <div style="margin-bottom: 15px;">
                         <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">优选IP列表 (yx):</label>
-                        <input type="text" id="preferredIPs" placeholder="例如: 1.2.3.4:443,5.6.7.8:80" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                        <input type="text" id="preferredIPs" placeholder="例如: 1.2.3.4:443,5.6.7.8:80,example.com:8443" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                        <small style="color: #00aa00; font-size: 0.85rem;">自定义优选IP和域名，支持端口。设置后只使用原生地址和自定义优选</small>
                     </div>
                     <div style="margin-bottom: 15px;">
                         <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">SOCKS5配置 (s):</label>
-                        <input type="text" id="socksConfig" placeholder="例如: user:pass@host:port" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                        <input type="text" id="socksConfig" placeholder="例如: user:pass@host:port 或 host:port" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                        <small style="color: #00aa00; font-size: 0.85rem;">SOCKS5代理地址，用于转发所有出站流量</small>
                     </div>
-                    <button type="submit" style="background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 12px 24px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; margin-right: 10px; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease;">保存其他配置</button>
+                    <button type="submit" style="background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 12px 24px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; margin-right: 10px; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease;">保存配置</button>
+                </form>
+                
+                <h3 style="color: #00ff00; margin: 20px 0 15px 0; font-size: 1.2rem;">高级控制</h3>
+                <form id="advancedConfigForm" style="margin-bottom: 20px;">
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">地区匹配 (rm):</label>
+                        <select id="regionMatching" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                            <option value="">默认（启用地区匹配）</option>
+                            <option value="no">关闭地区匹配</option>
+                        </select>
+                        <small style="color: #00aa00; font-size: 0.85rem;">设置为"关闭"时不进行地区智能匹配</small>
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">降级控制 (qj):</label>
+                        <select id="downgradeControl" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                            <option value="">默认（不启用降级）</option>
+                            <option value="no">启用降级模式</option>
+                        </select>
+                        <small style="color: #00aa00; font-size: 0.85rem;">设置为"启用"时：CF直连失败→SOCKS5连接→fallback地址</small>
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">端口控制 (dkby):</label>
+                        <select id="portControl" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                            <option value="">默认（保留所有端口）</option>
+                            <option value="yes">禁用80端口</option>
+                        </select>
+                        <small style="color: #00aa00; font-size: 0.85rem;">设置为"禁用80端口"时只保留443端口和其他非80端口节点</small>
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">优选控制 (yxby):</label>
+                        <select id="preferredControl" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                            <option value="">默认（启用优选）</option>
+                            <option value="yes">关闭优选</option>
+                        </select>
+                        <small style="color: #00aa00; font-size: 0.85rem;">设置为"关闭优选"时只使用原生地址，不生成优选IP和域名节点</small>
+                    </div>
+                    <button type="submit" style="background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 12px 24px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; margin-right: 10px; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease;">保存高级配置</button>
                 </form>
                 <div id="currentConfig" style="background: rgba(0, 0, 0, 0.9); border: 1px solid #00ff00; padding: 15px; margin: 10px 0; font-family: 'Courier New', monospace; color: #00ff00;">
                     加载中...
@@ -1880,6 +1920,10 @@ async function handleSubscriptionPage(request, user = null) {
                 document.getElementById('customIP').value = config.p || '';
                 document.getElementById('preferredIPs').value = config.yx || '';
                 document.getElementById('socksConfig').value = config.s || '';
+                document.getElementById('regionMatching').value = config.rm || '';
+                document.getElementById('downgradeControl').value = config.qj || '';
+                document.getElementById('portControl').value = config.dkby || '';
+                document.getElementById('preferredControl').value = config.yxby || '';
                 
             } catch (error) {
                 document.getElementById('currentConfig').textContent = '加载配置失败: ' + error.message;
@@ -1916,6 +1960,10 @@ async function handleSubscriptionPage(request, user = null) {
                 if (result.success) {
                     console.log('✅ 保存成功，重新加载配置');
                     await loadCurrentConfig();
+                    // 保存成功后刷新页面以更新系统状态
+                    setTimeout(function() {
+                        window.location.reload();
+                    }, 1500);
                 } else {
                     console.log('❌ 保存失败:', result.message);
                 }
@@ -1966,6 +2014,20 @@ async function handleSubscriptionPage(request, user = null) {
                         p: document.getElementById('customIP').value,
                         yx: document.getElementById('preferredIPs').value,
                         s: document.getElementById('socksConfig').value
+                    };
+                    await saveConfig(configData);
+                });
+            }
+            
+            const advancedConfigForm = document.getElementById('advancedConfigForm');
+            if (advancedConfigForm) {
+                advancedConfigForm.addEventListener('submit', async function(e) {
+                    e.preventDefault();
+                    const configData = {
+                        rm: document.getElementById('regionMatching').value,
+                        qj: document.getElementById('downgradeControl').value,
+                        dkby: document.getElementById('portControl').value,
+                        yxby: document.getElementById('preferredControl').value
                     };
                     await saveConfig(configData);
                 });
