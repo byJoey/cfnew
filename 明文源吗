@@ -755,15 +755,23 @@ export default {
 				
 				// 配置管理API路由（放在订阅页面路径下）
 				if (url.pathname.includes('/api/config')) {
-					const pathParts = url.pathname.split('/');
+					const pathParts = url.pathname.split('/').filter(p => p);
 					const userIndex = pathParts.findIndex(p => isValidFormat(p));
 					if (userIndex >= 0) {
 						const user = pathParts[userIndex];
 						if (user === authToken) {
 							return await handleConfigAPI(request);
 						} else {
-							return new Response('UUID错误', { status: 403 });
+							return new Response(JSON.stringify({ error: 'UUID错误' }), { 
+								status: 403,
+								headers: { 'Content-Type': 'application/json' }
+							});
 						}
+					} else {
+						return new Response(JSON.stringify({ error: '无效的API路径' }), { 
+							status: 404,
+							headers: { 'Content-Type': 'application/json' }
+						});
 					}
 				}
 				if (url.pathname.toLowerCase().includes(`/${subPath}`)) {
@@ -1766,9 +1774,14 @@ async function handleSubscriptionPage(request, user = null) {
         }
         
         // 配置管理相关函数
+        function getApiUrl(path) {
+            const pathname = window.location.pathname.replace(/\/$/, '');
+            return pathname + path;
+        }
+        
         async function checkKVStatus() {
             try {
-                const response = await fetch(window.location.pathname + '/api/config');
+                const response = await fetch(getApiUrl('/api/config'));
                 if (response.status === 503) {
                     // KV未配置
                     document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">⚠️ KV存储未启用或未配置</span>';
@@ -1797,7 +1810,7 @@ async function handleSubscriptionPage(request, user = null) {
         
         async function loadCurrentConfig() {
             try {
-                const response = await fetch(window.location.pathname + '/api/config');
+                const response = await fetch(getApiUrl('/api/config'));
                 if (!response.ok) {
                     document.getElementById('currentConfig').textContent = 'KV存储未启用';
                     return;
@@ -1828,7 +1841,7 @@ async function handleSubscriptionPage(request, user = null) {
         
         async function saveConfig(configData) {
             try {
-                const response = await fetch(window.location.pathname + '/api/config', {
+                const response = await fetch(getApiUrl('/api/config'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(configData)
