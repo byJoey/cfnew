@@ -117,7 +117,7 @@ async function loadKVConfig() {
     if (!kvStore) return;
     
     try {
-        const configData = await kvStore.get('wk_config');
+        const configData = await kvStore.get('c');
         if (configData) {
             kvConfig = JSON.parse(configData);
         }
@@ -131,7 +131,7 @@ async function saveKVConfig() {
     if (!kvStore) return;
     
     try {
-        await kvStore.put('wk_config', JSON.stringify(kvConfig));
+        await kvStore.put('c', JSON.stringify(kvConfig));
     } catch (error) {
         console.error('保存KV配置失败:', error);
     }
@@ -337,7 +337,8 @@ export default {
 				}
 			}
 
-			const customPreferred = env.yx || env.YX;
+			// 优先使用KV配置，然后使用环境变量
+			const customPreferred = getConfigValue('yx', env.yx || env.YX);
 			if (customPreferred) {
 				try {
 					const preferredList = customPreferred.split(',').map(item => item.trim()).filter(item => item);
@@ -345,19 +346,34 @@ export default {
 					customPreferredDomains = [];
 					
 					preferredList.forEach(item => {
-						const { address, port } = parseAddressAndPort(item);
+						// 检查是否包含节点名称 (#)
+						let nodeName = '';
+						let addressPart = item;
+						
+						if (item.includes('#')) {
+							const parts = item.split('#');
+							addressPart = parts[0].trim();
+							nodeName = parts[1].trim();
+						}
+						
+						const { address, port } = parseAddressAndPort(addressPart);
+						
+						// 如果没有设置节点名称，使用默认格式
+						if (!nodeName) {
+							nodeName = '自定义优选-' + address + (port ? ':' + port : '');
+						}
 						
 						if (isValidIP(address)) {
 							customPreferredIPs.push({ 
 								ip: address, 
 								port: port,
-								isp: '自定义优选-' + address + (port ? ':' + port : '') 
+								isp: nodeName
 							});
 						} else {
 							customPreferredDomains.push({ 
 								domain: address, 
 								port: port,
-								name: '自定义优选-' + address + (port ? ':' + port : '') 
+								name: nodeName
 							});
 						}
 					});
@@ -414,7 +430,8 @@ export default {
 			if (request.method === 'GET') {
 				if (url.pathname === '/region') {
 					const customIP = env.p || env.P;
-					const manualRegion = env.wk || env.WK;
+					// 优先使用KV配置，然后使用环境变量
+					const manualRegion = getConfigValue('wk', env.wk || env.WK);
 					
 					if (manualRegion && manualRegion.trim()) {
 						return new Response(JSON.stringify({
@@ -1542,8 +1559,8 @@ async function handleSubscriptionPage(request, user = null) {
                     </div>
                     <div style="margin-bottom: 15px;">
                         <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">优选IP列表 (yx):</label>
-                        <input type="text" id="preferredIPs" placeholder="例如: 1.2.3.4:443,5.6.7.8:80,example.com:8443" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                        <small style="color: #00aa00; font-size: 0.85rem;">自定义优选IP和域名，支持端口。设置后只使用原生地址和自定义优选</small>
+                        <input type="text" id="preferredIPs" placeholder="例如: 1.2.3.4:443#香港节点,5.6.7.8:80#美国节点,example.com:8443#新加坡节点" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                        <small style="color: #00aa00; font-size: 0.85rem;">格式: IP:端口#节点名称 或 IP:端口 (无#则使用默认名称)。支持多个，用逗号分隔</small>
                     </div>
                     <div style="margin-bottom: 15px;">
                         <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">SOCKS5配置 (s):</label>
