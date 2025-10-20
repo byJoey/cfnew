@@ -1822,11 +1822,19 @@ async function handleSubscriptionPage(request, user = null) {
                 }
                 const config = await response.json();
                 
+                // 过滤掉内部字段 kvEnabled
+                const displayConfig = {};
+                for (const [key, value] of Object.entries(config)) {
+                    if (key !== 'kvEnabled') {
+                        displayConfig[key] = value;
+                    }
+                }
+                
                 let configText = '当前配置:\\n';
-                if (Object.keys(config).length === 0) {
+                if (Object.keys(displayConfig).length === 0) {
                     configText += '(暂无配置)';
                 } else {
-                    for (const [key, value] of Object.entries(config)) {
+                    for (const [key, value] of Object.entries(displayConfig)) {
                         configText += key + ': ' + (value || '(未设置)') + '\\n';
                     }
                 }
