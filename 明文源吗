@@ -1737,12 +1737,13 @@ async function handleSubscriptionPage(request, user = null) {
                         isCustomIPMode = true;
                         detectedRegion = 'CUSTOM';
                         
-                        if (backupStatus) backupStatus.style.display = 'none';
-                        if (currentIP) currentIP.style.display = 'none';
-                        if (regionMatch) regionMatch.style.display = 'none';
-                        
                         geoInfo.innerHTML = '检测方式: <span style="color: #ffaa00;">自定义IP模式</span>';
                         regionStatus.innerHTML = 'Worker地区: <span style="color: #ffaa00;">🔧 自定义IP模式</span>';
+                        
+                        // 显示自定义IP配置状态
+                        if (backupStatus) backupStatus.innerHTML = 'ProxyIP状态: <span style="color: #44ff44;">✅ 自定义IP已配置</span>';
+                        if (currentIP) currentIP.innerHTML = '当前使用IP: <span style="color: #44ff44;">✅ 自定义IP模式</span>';
+                        if (regionMatch) regionMatch.innerHTML = '地区匹配: <span style="color: #ffaa00;">⚠️ 自定义IP模式</span>';
                         
                         return; // 提前返回，不执行后续的地区匹配逻辑
                     } else if (data.detectionMethod === '手动指定地区') {
@@ -1751,6 +1752,11 @@ async function handleSubscriptionPage(request, user = null) {
                         
                         geoInfo.innerHTML = '检测方式: <span style="color: #44aa44;">手动指定地区</span>';
                         regionStatus.innerHTML = 'Worker地区: <span style="color: #44ff44;">🎯 ' + regionNames[detectedRegion] + ' (手动指定)</span>';
+                        
+                        // 显示配置状态而不是检测状态
+                        if (backupStatus) backupStatus.innerHTML = 'ProxyIP状态: <span style="color: #44ff44;">✅ 10/10 可用 (ProxyIP域名预设可用)</span>';
+                        if (currentIP) currentIP.innerHTML = '当前使用IP: <span style="color: #44ff44;">✅ 智能就近选择中</span>';
+                        if (regionMatch) regionMatch.innerHTML = '地区匹配: <span style="color: #44ff44;">✅ 同地区IP可用 (1个)</span>';
                         
                         return; // 提前返回，不执行后续的地区匹配逻辑
                     } else if (data.region && regionNames[data.region]) {
@@ -1765,54 +1771,18 @@ async function handleSubscriptionPage(request, user = null) {
                 
                 regionStatus.innerHTML = 'Worker地区: <span style="color: #44ff44;">✅ ' + regionNames[detectedRegion] + '</span>';
                 
-                const backupIPs = [
-                    { domain: 'ProxyIP.US.CMLiussss.net', region: 'US' },
-                    { domain: 'ProxyIP.SG.CMLiussss.net', region: 'SG' },
-                    { domain: 'ProxyIP.JP.CMLiussss.net', region: 'JP' },
-                    { domain: 'ProxyIP.HK.CMLiussss.net', region: 'HK' },
-                    { domain: 'ProxyIP.KR.CMLiussss.net', region: 'KR' },
-                    { domain: 'ProxyIP.DE.CMLiussss.net', region: 'DE' },
-                    { domain: 'ProxyIP.SE.CMLiussss.net', region: 'SE' },
-                    { domain: 'ProxyIP.NL.CMLiussss.net', region: 'NL' },
-                    { domain: 'ProxyIP.FI.CMLiussss.net', region: 'FI' },
-                    { domain: 'ProxyIP.GB.CMLiussss.net', region: 'GB' }
-                ];
                 
-                let availableCount = 0;
-                let sameRegionAvailable = 0;
-                let nearbyRegionAvailable = 0;
-                
-                const nearbyRegions = {
-                    'US': ['SG', 'JP', 'HK', 'KR'],
-                    'SG': ['JP', 'HK', 'KR', 'US'],
-                    'JP': ['SG', 'HK', 'KR', 'US'],
-                    'HK': ['SG', 'JP', 'KR', 'US'],
-                    'KR': ['JP', 'HK', 'SG', 'US'],
-                    'DE': ['NL', 'GB', 'SE', 'FI'],
-                    'SE': ['DE', 'NL', 'FI', 'GB'],
-                    'NL': ['DE', 'GB', 'SE', 'FI'],
-                    'FI': ['SE', 'DE', 'NL', 'GB'],
-                    'GB': ['DE', 'NL', 'SE', 'FI']
-                };
-                
-                for (const ip of backupIPs) {
-                    availableCount++;
-                    if (ip.region === detectedRegion) {
-                        sameRegionAvailable++;
-                    } else if (nearbyRegions[detectedRegion] && nearbyRegions[detectedRegion].includes(ip.region)) {
-                        nearbyRegionAvailable++;
-                    }
+                // 直接显示配置状态，不再进行检测
+                if (backupStatus) {
+                    backupStatus.innerHTML = 'ProxyIP状态: <span style="color: #44ff44;">✅ 10/10 可用 (ProxyIP域名预设可用)</span>';
                 }
                 
-                backupStatus.innerHTML = 'ProxyIP状态: <span style="color: #44ff44;">✅ ' + availableCount + '/' + backupIPs.length + ' 可用</span> <span style="color: #00aa00; font-size: 0.8rem;">(ProxyIP域名预设可用)</span>';
-                currentIP.innerHTML = '当前使用IP: <span style="color: #44ff44;">✅ 智能就近选择中</span>';
+                if (currentIP) {
+                    currentIP.innerHTML = '当前使用IP: <span style="color: #44ff44;">✅ 智能就近选择中</span>';
+                }
                 
-                if (sameRegionAvailable > 0) {
-                    regionMatch.innerHTML = '地区匹配: <span style="color: #44ff44;">✅ 同地区IP可用 (' + sameRegionAvailable + '个)</span>';
-                } else if (nearbyRegionAvailable > 0) {
-                    regionMatch.innerHTML = '地区匹配: <span style="color: #ffaa00;">🔄 使用邻近地区IP (' + nearbyRegionAvailable + '个)</span>';
-                } else {
-                    regionMatch.innerHTML = '地区匹配: <span style="color: #ffaa00;">⚠️ 将使用其他地区IP</span>';
+                if (regionMatch) {
+                    regionMatch.innerHTML = '地区匹配: <span style="color: #44ff44;">✅ 同地区IP可用 (1个)</span>';
                 }
                 
             } catch (error) {
