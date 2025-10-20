@@ -1769,11 +1769,22 @@ async function handleSubscriptionPage(request, user = null) {
         async function checkKVStatus() {
             try {
                 const response = await fetch(window.location.pathname + '/api/config');
-                if (response.ok) {
-                    document.getElementById('kvStatus').innerHTML = '<span style="color: #44ff44;">✅ KV存储已启用，可以使用配置管理功能</span>';
-                    document.getElementById('configContent').style.display = 'block';
+                if (response.status === 503) {
+                    // KV未配置
+                    document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">⚠️ KV存储未启用或未配置</span>';
                     document.getElementById('configCard').style.display = 'block';
-                    await loadCurrentConfig();
+                } else if (response.ok) {
+                    const data = await response.json();
+                    // 检查响应是否包含KV配置信息
+                    if (data && data.kvEnabled === true) {
+                        document.getElementById('kvStatus').innerHTML = '<span style="color: #44ff44;">✅ KV存储已启用，可以使用配置管理功能</span>';
+                        document.getElementById('configContent').style.display = 'block';
+                        document.getElementById('configCard').style.display = 'block';
+                        await loadCurrentConfig();
+                    } else {
+                        document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">⚠️ KV存储未启用或未配置</span>';
+                        document.getElementById('configCard').style.display = 'block';
+                    }
                 } else {
                     document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">⚠️ KV存储未启用或未配置</span>';
                     document.getElementById('configCard').style.display = 'block';
@@ -1949,11 +1960,36 @@ function generateLinksFromNewIPs(list, user, workerDomain) {
 // 配置API处理函数
 async function handleConfigAPI(request) {
     if (request.method === 'GET') {
+        // 检查KV是否真正可用
+        if (!kvStore) {
+            return new Response(JSON.stringify({
+                error: 'KV存储未配置',
+                kvEnabled: false
+            }), {
+                status: 503,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+        
         // 获取当前配置
-        return new Response(JSON.stringify(kvConfig), {
+        return new Response(JSON.stringify({
+            ...kvConfig,
+            kvEnabled: true
+        }), {
             headers: { 'Content-Type': 'application/json' }
         });
     } else if (request.method === 'POST') {
+        // 检查KV是否真正可用
+        if (!kvStore) {
+            return new Response(JSON.stringify({
+                success: false,
+                message: 'KV存储未配置，无法保存配置'
+            }), {
+                status: 503,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+        
         // 更新配置
         try {
             const newConfig = await request.json();
