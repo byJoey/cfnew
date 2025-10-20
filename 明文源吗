@@ -735,7 +735,10 @@ export default {
 						if (user === authToken) {
 							return await handleSubscriptionPage(request, user);
 						} else {
-							return new Response('UUID错误 请注意变量名称是u不是uuid', { status: 403 });
+							return new Response(JSON.stringify({ error: 'UUID错误 请注意变量名称是u不是uuid' }), { 
+								status: 403,
+								headers: { 'Content-Type': 'application/json' }
+							});
 						}
 					}
 				}
@@ -747,7 +750,10 @@ export default {
 							if (user === authToken) {
 								return await handleSubscriptionRequest(request, user, url);
 							} else {
-								return new Response('UUID错误', { status: 403 });
+								return new Response(JSON.stringify({ error: 'UUID错误' }), { 
+									status: 403,
+									headers: { 'Content-Type': 'application/json' }
+								});
 							}
 						}
 					}
@@ -756,29 +762,33 @@ export default {
 				// 配置管理API路由（放在订阅页面路径下）
 				if (url.pathname.includes('/api/config')) {
 					const pathParts = url.pathname.split('/').filter(p => p);
-					const userIndex = pathParts.findIndex(p => isValidFormat(p));
-					if (userIndex >= 0) {
-						const user = pathParts[userIndex];
-						if (user === authToken) {
+					// 查找UUID - 应该在 api 之前
+					const apiIndex = pathParts.indexOf('api');
+					if (apiIndex > 0) {
+						const user = pathParts[apiIndex - 1];
+						if (isValidFormat(user) && user === authToken) {
 							return await handleConfigAPI(request);
-						} else {
+						} else if (isValidFormat(user)) {
 							return new Response(JSON.stringify({ error: 'UUID错误' }), { 
 								status: 403,
 								headers: { 'Content-Type': 'application/json' }
 							});
 						}
-					} else {
-						return new Response(JSON.stringify({ error: '无效的API路径' }), { 
-							status: 404,
-							headers: { 'Content-Type': 'application/json' }
-						});
 					}
+					// 如果路径格式不正确，返回JSON错误
+					return new Response(JSON.stringify({ error: '无效的API路径' }), { 
+						status: 404,
+						headers: { 'Content-Type': 'application/json' }
+					});
 				}
 				if (url.pathname.toLowerCase().includes(`/${subPath}`)) {
 					return await handleSubscriptionRequest(request, authToken);
 				}
 			}
-			return new Response('Not Found', { status: 404 });
+			return new Response(JSON.stringify({ error: 'Not Found' }), { 
+				status: 404,
+				headers: { 'Content-Type': 'application/json' }
+			});
 		} catch (err) {
 			return new Response(err.toString(), { status: 500 });
 		}
@@ -1503,23 +1513,9 @@ async function handleSubscriptionPage(request, user = null) {
                 检测KV状态中...
             </div>
             <div id="configContent" style="display: none;">
-                <form id="configForm" style="margin-bottom: 20px;">
-                    <h3 style="color: #00ff00; margin-bottom: 15px; font-size: 1.2rem;">基础配置</h3>
+                <form id="regionForm" style="margin-bottom: 20px;">
                     <div style="margin-bottom: 15px;">
-                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">UUID (u) - 必需:</label>
-                        <input type="text" id="uuid" placeholder="例如: 351c9981-04b6-4103-aa4b-864aa9c91469" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                        <small style="color: #00aa00; font-size: 0.85rem;">你的UUID，必需设置</small>
-                    </div>
-                    
-                    <div style="margin-bottom: 15px;">
-                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">订阅地址 (d) - 可选:</label>
-                        <input type="text" id="subPath" placeholder="不填就是/你的uuid" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                        <small style="color: #00aa00; font-size: 0.85rem;">自定义订阅路径，不填则使用/你的uuid</small>
-                    </div>
-                    
-                    <h3 style="color: #00ff00; margin: 20px 0 15px 0; font-size: 1.2rem;">地区配置</h3>
-                    <div style="margin-bottom: 15px;">
-                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">指定地区 (wk) - 可选:</label>
+                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">指定地区 (wk):</label>
                         <select id="wkRegion" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
                             <option value="">自动检测</option>
                             <option value="US">🇺🇸 美国</option>
@@ -1533,67 +1529,23 @@ async function handleSubscriptionPage(request, user = null) {
                             <option value="FI">🇫🇮 芬兰</option>
                             <option value="GB">🇬🇧 英国</option>
                         </select>
-                        <small style="color: #00aa00; font-size: 0.85rem;">手动指定Worker地区，不设置则自动检测</small>
                     </div>
-                    
-                    <h3 style="color: #00ff00; margin: 20px 0 15px 0; font-size: 1.2rem;">代理配置</h3>
+                    <button type="submit" style="background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 12px 24px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; margin-right: 10px; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease;">保存地区配置</button>
+                </form>
+                <form id="otherConfigForm" style="margin-bottom: 20px;">
                     <div style="margin-bottom: 15px;">
-                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">ProxyIP (p) - 可选:</label>
+                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">自定义IP (p):</label>
                         <input type="text" id="customIP" placeholder="例如: 1.2.3.4:443" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                        <small style="color: #00aa00; font-size: 0.85rem;">自定义ProxyIP地址和端口</small>
                     </div>
-                    
                     <div style="margin-bottom: 15px;">
-                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">SOCKS5配置 (s) - 可选:</label>
-                        <input type="text" id="socksConfig" placeholder="例如: user:pass@host:port 或 host:port" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                        <small style="color: #00aa00; font-size: 0.85rem;">SOCKS5代理地址，用于转发所有出站流量</small>
+                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">优选IP列表 (yx):</label>
+                        <input type="text" id="preferredIPs" placeholder="例如: 1.2.3.4:443,5.6.7.8:80" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
                     </div>
-                    
-                    <h3 style="color: #00ff00; margin: 20px 0 15px 0; font-size: 1.2rem;">优选配置</h3>
                     <div style="margin-bottom: 15px;">
-                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">自定义优选IP/域名 (yx) - 可选:</label>
-                        <input type="text" id="preferredIPs" placeholder="例如: 1.1.1.1:8080,2.2.2.2,example.com:8443" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                        <small style="color: #00aa00; font-size: 0.85rem;">自定义优选IP和域名，支持端口。设置后只使用原生地址和自定义优选</small>
+                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">SOCKS5配置 (s):</label>
+                        <input type="text" id="socksConfig" placeholder="例如: user:pass@host:port" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
                     </div>
-                    
-                    <h3 style="color: #00ff00; margin: 20px 0 15px 0; font-size: 1.2rem;">高级控制</h3>
-                    <div style="margin-bottom: 15px;">
-                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">降级控制 (qj):</label>
-                        <select id="downgradeControl" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                            <option value="">默认（不启用降级）</option>
-                            <option value="no">启用降级模式</option>
-                        </select>
-                        <small style="color: #00aa00; font-size: 0.85rem;">设置为"启用"时：CF直连失败→SOCKS5连接→fallback地址</small>
-                    </div>
-                    
-                    <div style="margin-bottom: 15px;">
-                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">端口控制 (dkby):</label>
-                        <select id="portControl" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                            <option value="">默认（保留所有端口）</option>
-                            <option value="yes">禁用80端口</option>
-                        </select>
-                        <small style="color: #00aa00; font-size: 0.85rem;">设置为"禁用80端口"时只保留443端口和其他非80端口节点</small>
-                    </div>
-                    
-                    <div style="margin-bottom: 15px;">
-                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">优选控制 (yxby):</label>
-                        <select id="preferredControl" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                            <option value="">默认（启用优选）</option>
-                            <option value="yes">关闭优选</option>
-                        </select>
-                        <small style="color: #00aa00; font-size: 0.85rem;">设置为"关闭优选"时只使用原生地址，不生成优选IP和域名节点</small>
-                    </div>
-                    
-                    <div style="margin-bottom: 15px;">
-                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">地区匹配 (rm):</label>
-                        <select id="regionMatching" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                            <option value="">默认（启用地区匹配）</option>
-                            <option value="no">关闭地区匹配</option>
-                        </select>
-                        <small style="color: #00aa00; font-size: 0.85rem;">设置为"关闭"时不进行地区智能匹配</small>
-                    </div>
-                    
-                    <button type="submit" style="background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 12px 24px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; margin-right: 10px; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease;">保存所有配置</button>
+                    <button type="submit" style="background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 12px 24px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; margin-right: 10px; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease;">保存其他配置</button>
                 </form>
                 <div id="currentConfig" style="background: rgba(0, 0, 0, 0.9); border: 1px solid #00ff00; padding: 15px; margin: 10px 0; font-family: 'Courier New', monospace; color: #00ff00;">
                     加载中...
@@ -1701,16 +1653,12 @@ async function handleSubscriptionPage(request, user = null) {
         
         async function checkSystemStatus() {
             try {
+                const cfStatus = document.getElementById('cfStatus');
                 const regionStatus = document.getElementById('regionStatus');
                 const geoInfo = document.getElementById('geoInfo');
                 const backupStatus = document.getElementById('backupStatus');
                 const currentIP = document.getElementById('currentIP');
                 const regionMatch = document.getElementById('regionMatch');
-                
-                if (!regionStatus || !geoInfo) {
-                    console.error('系统状态元素未找到');
-                    return;
-                }
                 
                 const regionNames = {
                     'US': '🇺🇸 美国', 'SG': '🇸🇬 新加坡', 'JP': '🇯🇵 日本', 'HK': '🇭🇰 香港',
@@ -1718,20 +1666,11 @@ async function handleSubscriptionPage(request, user = null) {
                     'FI': '🇫🇮 芬兰', 'GB': '🇬🇧 英国'
                 };
                 
-                let detectedRegion = 'HK'; // 默认值
+                let detectedRegion = 'US'; // 默认值
                 let isCustomIPMode = false;
                 let isManualRegionMode = false;
-                
                 try {
-                    const response = await fetch('/region', { 
-                        method: 'GET',
-                        headers: { 'Accept': 'application/json' }
-                    });
-                    
-                    if (!response.ok) {
-                        throw new Error('Region API返回错误: ' + response.status);
-                    }
-                    
+                    const response = await fetch('/region');
                     const data = await response.json();
                     
                     
@@ -1762,13 +1701,10 @@ async function handleSubscriptionPage(request, user = null) {
                     geoInfo.innerHTML = '检测方式: <span style="color: #44ff44;">Cloudflare内置检测</span>';
                     
                 } catch (e) {
-                    console.error('Region detection error:', e);
-                    geoInfo.innerHTML = '检测方式: <span style="color: #ffaa00;">⚠️ 使用默认地区</span>';
+                    geoInfo.innerHTML = '检测方式: <span style="color: #ff4444;">检测失败</span>';
                 }
                 
-                // 确保显示地区信息
-                const regionName = regionNames[detectedRegion] || detectedRegion;
-                regionStatus.innerHTML = 'Worker地区: <span style="color: #44ff44;">✅ ' + regionName + '</span>';
+                regionStatus.innerHTML = 'Worker地区: <span style="color: #44ff44;">✅ ' + regionNames[detectedRegion] + '</span>';
                 
                 const backupIPs = [
                     { domain: 'ProxyIP.US.CMLiussss.net', region: 'US' },
@@ -1822,11 +1758,11 @@ async function handleSubscriptionPage(request, user = null) {
                 
             } catch (error) {
                 console.error('状态检测失败:', error);
-                if (regionStatus) regionStatus.innerHTML = 'Worker地区: <span style="color: #ff4444;">❌ 检测失败</span>';
-                if (geoInfo) geoInfo.innerHTML = '检测方式: <span style="color: #ff4444;">❌ 检测失败</span>';
-                if (backupStatus) backupStatus.innerHTML = 'ProxyIP状态: <span style="color: #ff4444;">❌ 检测失败</span>';
-                if (currentIP) currentIP.innerHTML = '当前使用IP: <span style="color: #ff4444;">❌ 检测失败</span>';
-                if (regionMatch) regionMatch.innerHTML = '地区匹配: <span style="color: #ff4444;">❌ 检测失败</span>';
+                document.getElementById('regionStatus').innerHTML = 'Worker地区: <span style="color: #ff4444;">❌ 检测失败</span>';
+                document.getElementById('geoInfo').innerHTML = '地理位置: <span style="color: #ff4444;">❌ 检测失败</span>';
+                document.getElementById('backupStatus').innerHTML = 'ProxyIP状态: <span style="color: #ff4444;">❌ 检测失败</span>';
+                document.getElementById('currentIP').innerHTML = '当前使用IP: <span style="color: #ff4444;">❌ 检测失败</span>';
+                document.getElementById('regionMatch').innerHTML = '地区匹配: <span style="color: #ff4444;">❌ 检测失败</span>';
             }
         }
         
@@ -1848,14 +1784,9 @@ async function handleSubscriptionPage(request, user = null) {
         }
         
         // 配置管理相关函数
-        function getApiUrl(path) {
-            const pathname = window.location.pathname.replace(/\/$/, '');
-            return pathname + path;
-        }
-        
         async function checkKVStatus() {
             try {
-                const response = await fetch(getApiUrl('/api/config'));
+                const response = await fetch(window.location.pathname + '/api/config');
                 if (response.status === 503) {
                     // KV未配置
                     document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">⚠️ KV存储未启用或未配置</span>';
@@ -1884,46 +1815,29 @@ async function handleSubscriptionPage(request, user = null) {
         
         async function loadCurrentConfig() {
             try {
-                const response = await fetch(getApiUrl('/api/config'));
+                const response = await fetch(window.location.pathname + '/api/config');
                 if (!response.ok) {
                     document.getElementById('currentConfig').textContent = 'KV存储未启用';
                     return;
                 }
                 const config = await response.json();
                 
-                // 过滤掉kvEnabled字段
-                const displayConfig = Object.keys(config).filter(k => k !== 'kvEnabled').reduce((obj, key) => {
-                    obj[key] = config[key];
-                    return obj;
-                }, {});
-                
                 let configText = '当前配置:\\n';
-                if (Object.keys(displayConfig).length === 0) {
+                if (Object.keys(config).length === 0) {
                     configText += '(暂无配置)';
                 } else {
-                    for (const [key, value] of Object.entries(displayConfig)) {
+                    for (const [key, value] of Object.entries(config)) {
                         configText += key + ': ' + (value || '(未设置)') + '\\n';
                     }
                 }
                 
                 document.getElementById('currentConfig').textContent = configText;
                 
-                // 更新表单值（安全地设置）
-                const setFieldValue = function(id, value) {
-                    const field = document.getElementById(id);
-                    if (field) field.value = value || '';
-                };
-                
-                setFieldValue('uuid', config.u);
-                setFieldValue('subPath', config.d);
-                setFieldValue('wkRegion', config.wk);
-                setFieldValue('customIP', config.p);
-                setFieldValue('socksConfig', config.s);
-                setFieldValue('preferredIPs', config.yx);
-                setFieldValue('downgradeControl', config.qj);
-                setFieldValue('portControl', config.dkby);
-                setFieldValue('preferredControl', config.yxby);
-                setFieldValue('regionMatching', config.rm);
+                // 更新表单值
+                document.getElementById('wkRegion').value = config.wk || '';
+                document.getElementById('customIP').value = config.p || '';
+                document.getElementById('preferredIPs').value = config.yx || '';
+                document.getElementById('socksConfig').value = config.s || '';
                 
             } catch (error) {
                 document.getElementById('currentConfig').textContent = '加载配置失败: ' + error.message;
@@ -1932,7 +1846,7 @@ async function handleSubscriptionPage(request, user = null) {
         
         async function saveConfig(configData) {
             try {
-                const response = await fetch(getApiUrl('/api/config'), {
+                const response = await fetch(window.location.pathname + '/api/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(configData)
@@ -1968,52 +1882,31 @@ async function handleSubscriptionPage(request, user = null) {
         }
         
         document.addEventListener('DOMContentLoaded', function() {
-            try {
-                createMatrixRain();
-            } catch (error) {
-                console.error('Matrix rain error:', error);
-            }
-            
-            try {
-                checkSystemStatus();
-            } catch (error) {
-                console.error('System status error:', error);
-            }
-            
-            try {
-                checkKVStatus();
-            } catch (error) {
-                console.error('KV status error:', error);
-            }
+            createMatrixRain();
+            checkSystemStatus();
+            checkKVStatus();
             
             // 绑定表单事件
-            try {
-                const configForm = document.getElementById('configForm');
-                if (configForm) {
-                    configForm.addEventListener('submit', async function(e) {
-                        e.preventDefault();
-                        try {
-                            const configData = {
-                                u: document.getElementById('uuid').value,
-                                d: document.getElementById('subPath').value,
-                                wk: document.getElementById('wkRegion').value,
-                                p: document.getElementById('customIP').value,
-                                s: document.getElementById('socksConfig').value,
-                                yx: document.getElementById('preferredIPs').value,
-                                qj: document.getElementById('downgradeControl').value,
-                                dkby: document.getElementById('portControl').value,
-                                yxby: document.getElementById('preferredControl').value,
-                                rm: document.getElementById('regionMatching').value
-                            };
-                            await saveConfig(configData);
-                        } catch (error) {
-                            console.error('Save config error:', error);
-                            showStatus('保存失败: ' + error.message, 'error');
-                        }
-                    });
-                }
-            } catch (error) {
-                console.error('Form binding error:', error);
+            const regionForm = document.getElementById('regionForm');
+            if (regionForm) {
+                regionForm.addEventListener('submit', async function(e) {
+                    e.preventDefault();
+                    const wkRegion = document.getElementById('wkRegion').value;
+                    await saveConfig({ wk: wkRegion });
+                });
+            }
+            
+            const otherConfigForm = document.getElementById('otherConfigForm');
+            if (otherConfigForm) {
+                otherConfigForm.addEventListener('submit', async function(e) {
+                    e.preventDefault();
+                    const configData = {
+                        p: document.getElementById('customIP').value,
+                        yx: document.getElementById('preferredIPs').value,
+                        s: document.getElementById('socksConfig').value
+                    };
+                    await saveConfig(configData);
+                });
             }
         });
     </script>
@@ -2148,5 +2041,8 @@ async function handleConfigAPI(request) {
         }
     }
     
-    return new Response('Method not allowed', { status: 405 });
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), { 
+        status: 405,
+        headers: { 'Content-Type': 'application/json' }
+    });
 }
