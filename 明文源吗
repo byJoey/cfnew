@@ -12,6 +12,11 @@ let disablePreferred = false;
 
 let enableRegionMatching = true;
 let currentWorkerRegion = '';
+let manualWorkerRegion = '';
+
+// KV存储相关变量
+let kvStore = null;
+let kvConfig = {};
 
 const regionMapping = {
     'US': ['🇺🇸 美国', 'US', 'United States'],
@@ -95,93 +100,81 @@ function isValidIP(ip) {
     return false;
 }
 
-async function detectWorkerRegion(request) {
-    try {
-        let workerIP = null;
+// KV存储相关函数
+async function initKVStore(env) {
+    if (env.KV_CONFIG) {
         try {
-            const ipResponse = await fetch('https://ipv4-overseas.itdog.plus/', {
-                method: 'GET',
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (compatible; CF-Worker/1.0)',
-                    'Accept': 'application/json'
-                },
-                signal: AbortSignal.timeout(5000)
-            });
-            
-            if (ipResponse.ok) {
-                const ipData = await ipResponse.json();
-                if (ipData.type === 'success' && ipData.ip) {
-                    workerIP = ipData.ip;
-                } else {
-                    workerIP = '8.8.8.8';
-                }
-            } else {
-                workerIP = '8.8.8.8';
-            }
+            kvStore = env.KV_CONFIG;
+            await loadKVConfig();
         } catch (error) {
-            workerIP = '8.8.8.8';
+            console.error('KV初始化失败，将禁用KV功能:', error);
+            kvStore = null;
         }
-        
-        const bestBackupIP = await getBestBackupIP('HK');
-        if (bestBackupIP) {
-            const apiUrl = `https://joeyblog.net/api/t.php?ip=${workerIP}`;
-            try {
-                const response = await fetch(apiUrl, {
-                    method: 'GET',
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (compatible; CF-Worker/1.0)',
-                        'Accept': 'application/json'
-                    },
-                    signal: AbortSignal.timeout(5000)
-                });
-                
-                if (response.ok) {
-                    const data = await response.json();
-                    let countryCode = null;
-                    
-                    if (data.user_country_code) {
-                        countryCode = data.user_country_code.toUpperCase();
-                    } else if (data.user_country) {
-                        const countryNameToCode = {
-                            'United States': 'US', 'Singapore': 'SG', 'Japan': 'JP',
-                            'Hong Kong': 'HK', 'South Korea': 'KR', 'Germany': 'DE',
-                            'Sweden': 'SE', 'Netherlands': 'NL', 'Finland': 'FI', 'United Kingdom': 'GB'
-                        };
-                        countryCode = countryNameToCode[data.user_country] || data.user_country;
-                    }
-                    
-                    if (countryCode) {
-                        const countryToRegion = {
-                            'US': 'US', 'SG': 'SG', 'JP': 'JP', 'HK': 'HK', 'KR': 'KR',
-                            'DE': 'DE', 'SE': 'SE', 'NL': 'NL', 'FI': 'FI', 'GB': 'GB',
-                            'CN': 'HK', 'TW': 'HK', 'AU': 'SG', 'CA': 'US',
-                            'FR': 'DE', 'IT': 'DE', 'ES': 'DE', 'CH': 'DE',
-                            'AT': 'DE', 'BE': 'NL', 'DK': 'SE', 'NO': 'SE', 'IE': 'GB'
-                        };
-                        
-                        if (countryToRegion[countryCode]) {
-                            return countryToRegion[countryCode];
-                        } else {
-                            return 'HK';
-                        }
-                    } else {
-                        return 'HK';
-                    }
-                } else {
-                    return 'HK';
-                }
-            } catch (apiError) {
-                return 'HK';
-            }
-        } else {
-            return 'HK';
-        }
-        
-    } catch (error) {
-        console.error('地区检测失败:', error);
-        return 'US';
     }
 }
+
+async function loadKVConfig() {
+    if (!kvStore) return;
+    
+    try {
+        const configData = await kvStore.get('wk_config');
+        if (configData) {
+            kvConfig = JSON.parse(configData);
+        }
+    } catch (error) {
+        console.error('加载KV配置失败:', error);
+        kvConfig = {};
+    }
+}
+
+async function saveKVConfig() {
+    if (!kvStore) return;
+    
+    try {
+        await kvStore.put('wk_config', JSON.stringify(kvConfig));
+    } catch (error) {
+        console.error('保存KV配置失败:', error);
+    }
+}
+
+function getConfigValue(key, defaultValue = '') {
+    // 优先使用KV配置，然后使用环境变量
+    if (kvConfig[key] !== undefined) {
+        return kvConfig[key];
+    }
+    return defaultValue;
+}
+
+async function setConfigValue(key, value) {
+    kvConfig[key] = value;
+    await saveKVConfig();
+}
+
+async function detectWorkerRegion(request) {
+    try {
+        const cfCountry = request.cf?.country;
+        
+        if (cfCountry) {
+            const countryToRegion = {
+                'US': 'US', 'SG': 'SG', 'JP': 'JP', 'HK': 'HK', 'KR': 'KR',
+                'DE': 'DE', 'SE': 'SE', 'NL': 'NL', 'FI': 'FI', 'GB': 'GB',
+                'CN': 'HK', 'TW': 'HK', 'AU': 'SG', 'CA': 'US',
+                'FR': 'DE', 'IT': 'DE', 'ES': 'DE', 'CH': 'DE',
+                'AT': 'DE', 'BE': 'NL', 'DK': 'SE', 'NO': 'SE', 'IE': 'GB'
+            };
+            
+            if (countryToRegion[cfCountry]) {
+                return countryToRegion[cfCountry];
+            }
+        }
+        
+        return 'HK';
+        
+    } catch (error) {
+        return 'HK';
+    }
+}
+
 
 async function checkIPAvailability(domain, port = 443, timeout = 2000) {
     try {
@@ -293,13 +286,21 @@ function parseAddressAndPort(input) {
 export default {
 	async fetch(request, env, ctx) {
 		try {
+			// 初始化KV存储
+			await initKVStore(env);
+			
 			authToken = (env.u || env.U || authToken).toLowerCase();
 			const subPath = (env.d || env.D || authToken).toLowerCase();
 			
 			const customIP = env.p || env.P;
 			let useCustomIP = false;
 			
-			if (customIP && customIP.trim()) {
+			// 检查是否手动指定了wk地区 (优先使用KV配置)
+			const manualRegion = getConfigValue('wk', env.wk || env.WK);
+			if (manualRegion && manualRegion.trim()) {
+				manualWorkerRegion = manualRegion.trim().toUpperCase();
+				currentWorkerRegion = manualWorkerRegion;
+			} else if (customIP && customIP.trim()) {
 				useCustomIP = true;
 				currentWorkerRegion = 'CUSTOM';
 			} else {
@@ -388,7 +389,18 @@ export default {
 			} else if (request.method === 'GET') {
 				if (url.pathname === '/region') {
 					const customIP = env.p || env.P;
-					if (customIP && customIP.trim()) {
+					const manualRegion = env.wk || env.WK;
+					
+					if (manualRegion && manualRegion.trim()) {
+						return new Response(JSON.stringify({
+							region: manualRegion.trim().toUpperCase(),
+							detectionMethod: '手动指定地区',
+							manualRegion: manualRegion.trim().toUpperCase(),
+							timestamp: new Date().toISOString()
+						}), {
+							headers: { 'Content-Type': 'application/json' }
+						});
+					} else if (customIP && customIP.trim()) {
 						return new Response(JSON.stringify({
 							region: 'CUSTOM',
 							detectionMethod: '自定义IP模式',
@@ -430,40 +442,7 @@ export default {
 					}
 				}
 				
-				if (url.pathname === '/test-ip-api') {
-					try {
-						let workerIP = '8.8.8.8'; // 默认IP
-						try {
-							const ipResponse = await fetch('https://ipv4-overseas.itdog.plus/');
-							if (ipResponse.ok) {
-								const ipData = await ipResponse.json();
-								if (ipData.type === 'success' && ipData.ip) {
-									workerIP = ipData.ip;
-								}
-							}
-						} catch (ipError) {
-						}
-						
-						const response = await fetch(`https://joeyblog.net/api/t.php?ip=${workerIP}`);
-						const data = await response.json();
-						return new Response(JSON.stringify({
-							apiResponse: data,
-							workerIP: workerIP,
-							message: '双重API测试完成',
-							timestamp: new Date().toISOString()
-						}), {
-							headers: { 'Content-Type': 'application/json' }
-						});
-					} catch (error) {
-						return new Response(JSON.stringify({
-							error: error.message,
-							message: '双重API测试失败'
-						}), {
-							status: 500,
-							headers: { 'Content-Type': 'application/json' }
-						});
-					}
-				}
+				
 				if (url.pathname === '/') {
 					const terminalHtml = `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -770,6 +749,20 @@ export default {
 							} else {
 								return new Response('UUID错误', { status: 403 });
 							}
+						}
+					}
+				}
+				
+				// 配置管理API路由（放在订阅页面路径下）
+				if (url.pathname.includes('/api/config')) {
+					const pathParts = url.pathname.split('/');
+					const userIndex = pathParts.findIndex(p => isValidFormat(p));
+					if (userIndex >= 0) {
+						const user = pathParts[userIndex];
+						if (user === authToken) {
+							return await handleConfigAPI(request);
+						} else {
+							return new Response('UUID错误', { status: 403 });
 						}
 					}
 				}
@@ -1496,6 +1489,55 @@ async function handleSubscriptionPage(request, user = null) {
                 <div id="selectionLogic" style="margin: 8px 0; color: #00aa00; font-family: 'Courier New', monospace; font-size: 0.9rem; text-shadow: 0 0 3px #00aa00;">选择逻辑: 同地区 → 邻近地区 → 其他地区</div>
             </div>
         </div>
+        <div class="card" id="configCard" style="display: none;">
+            <h2 class="card-title">[ 配置管理 ]</h2>
+            <div id="kvStatus" style="margin-bottom: 20px; padding: 10px; background: rgba(0, 20, 0, 0.8); border: 1px solid #00ff00; color: #00ff00;">
+                检测KV状态中...
+            </div>
+            <div id="configContent" style="display: none;">
+                <form id="regionForm" style="margin-bottom: 20px;">
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">指定地区 (wk):</label>
+                        <select id="wkRegion" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                            <option value="">自动检测</option>
+                            <option value="US">🇺🇸 美国</option>
+                            <option value="SG">🇸🇬 新加坡</option>
+                            <option value="JP">🇯🇵 日本</option>
+                            <option value="HK">🇭🇰 香港</option>
+                            <option value="KR">🇰🇷 韩国</option>
+                            <option value="DE">🇩🇪 德国</option>
+                            <option value="SE">🇸🇪 瑞典</option>
+                            <option value="NL">🇳🇱 荷兰</option>
+                            <option value="FI">🇫🇮 芬兰</option>
+                            <option value="GB">🇬🇧 英国</option>
+                        </select>
+                    </div>
+                    <button type="submit" style="background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 12px 24px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; margin-right: 10px; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease;">保存地区配置</button>
+                </form>
+                <form id="otherConfigForm" style="margin-bottom: 20px;">
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">自定义IP (p):</label>
+                        <input type="text" id="customIP" placeholder="例如: 1.2.3.4:443" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">优选IP列表 (yx):</label>
+                        <input type="text" id="preferredIPs" placeholder="例如: 1.2.3.4:443,5.6.7.8:80" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">SOCKS5配置 (s):</label>
+                        <input type="text" id="socksConfig" placeholder="例如: user:pass@host:port" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                    </div>
+                    <button type="submit" style="background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 12px 24px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; margin-right: 10px; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease;">保存其他配置</button>
+                </form>
+                <div id="currentConfig" style="background: rgba(0, 0, 0, 0.9); border: 1px solid #00ff00; padding: 15px; margin: 10px 0; font-family: 'Courier New', monospace; color: #00ff00;">
+                    加载中...
+                </div>
+                <button onclick="loadCurrentConfig()" style="background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 12px 24px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; margin-right: 10px; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease;">刷新配置</button>
+                <button onclick="resetAllConfig()" style="background: rgba(255, 0, 0, 0.15); border: 2px solid #ff0000; padding: 12px 24px; color: #ff0000; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; text-shadow: 0 0 8px #ff0000; transition: all 0.4s ease;">重置配置</button>
+            </div>
+            <div id="statusMessage" style="display: none; padding: 10px; margin: 10px 0; border: 1px solid #00ff00; background: rgba(0, 20, 0, 0.8); color: #00ff00; text-shadow: 0 0 5px #00ff00;"></div>
+        </div>
+        
         <div class="card">
             <h2 class="card-title">[ 相关链接 ]</h2>
             <div style="text-align: center; margin: 20px 0;">
@@ -1608,6 +1650,7 @@ async function handleSubscriptionPage(request, user = null) {
                 
                 let detectedRegion = 'US'; // 默认值
                 let isCustomIPMode = false;
+                let isManualRegionMode = false;
                 try {
                     const response = await fetch('/region');
                     const data = await response.json();
@@ -1625,11 +1668,19 @@ async function handleSubscriptionPage(request, user = null) {
                         regionStatus.innerHTML = 'Worker地区: <span style="color: #ffaa00;">🔧 自定义IP模式</span>';
                         
                         return; // 提前返回，不执行后续的地区匹配逻辑
+                    } else if (data.detectionMethod === '手动指定地区') {
+                        isManualRegionMode = true;
+                        detectedRegion = data.region;
+                        
+                        geoInfo.innerHTML = '检测方式: <span style="color: #44aa44;">手动指定地区</span>';
+                        regionStatus.innerHTML = 'Worker地区: <span style="color: #44ff44;">🎯 ' + regionNames[detectedRegion] + ' (手动指定)</span>';
+                        
+                        return; // 提前返回，不执行后续的地区匹配逻辑
                     } else if (data.region && regionNames[data.region]) {
                         detectedRegion = data.region;
                     }
                     
-                    geoInfo.innerHTML = '检测方式: <span style="color: #44ff44;">API地理位置检测</span>';
+                    geoInfo.innerHTML = '检测方式: <span style="color: #44ff44;">Cloudflare内置检测</span>';
                     
                 } catch (e) {
                     geoInfo.innerHTML = '检测方式: <span style="color: #ff4444;">检测失败</span>';
@@ -1714,34 +1765,120 @@ async function handleSubscriptionPage(request, user = null) {
             }
         }
         
-        async function testIPAPI() {
+        // 配置管理相关函数
+        async function checkKVStatus() {
             try {
-                const response = await fetch('/test-ip-api');
-                const data = await response.json();
-                
-                
-                if (data.apiResponse) {
-                    const apiData = data.apiResponse;
-                    let message = '双重API响应:\\n';
-                    message += 'Worker IP (itdog.plus): ' + (data.workerIP || '未知') + '\\n';
-                    message += '用户IP (joeyblog.net): ' + (apiData.user_ip || '未知') + '\\n';
-                    message += '国家: ' + (apiData.user_country || '未知') + '\\n';
-                    message += '国家代码: ' + (apiData.user_country_code || '未知') + '\\n';
-                    message += '城市: ' + (apiData.user_city || '未知') + '\\n';
-                    message += '组织: ' + (apiData.user_org || '未知');
-                    alert(message);
+                const response = await fetch(window.location.pathname + '/api/config');
+                if (response.ok) {
+                    document.getElementById('kvStatus').innerHTML = '<span style="color: #44ff44;">✅ KV存储已启用，可以使用配置管理功能</span>';
+                    document.getElementById('configContent').style.display = 'block';
+                    document.getElementById('configCard').style.display = 'block';
+                    await loadCurrentConfig();
                 } else {
-                    alert('双重API测试失败: ' + (data.error || '未知错误'));
+                    document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">⚠️ KV存储未启用或未配置</span>';
+                    document.getElementById('configCard').style.display = 'block';
                 }
             } catch (error) {
-                console.error('双重API测试失败:', error);
-                alert('双重API测试失败: ' + error.message);
+                document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">⚠️ KV存储未启用或未配置</span>';
+                document.getElementById('configCard').style.display = 'block';
+            }
+        }
+        
+        async function loadCurrentConfig() {
+            try {
+                const response = await fetch(window.location.pathname + '/api/config');
+                if (!response.ok) {
+                    document.getElementById('currentConfig').textContent = 'KV存储未启用';
+                    return;
+                }
+                const config = await response.json();
+                
+                let configText = '当前配置:\\n';
+                if (Object.keys(config).length === 0) {
+                    configText += '(暂无配置)';
+                } else {
+                    for (const [key, value] of Object.entries(config)) {
+                        configText += key + ': ' + (value || '(未设置)') + '\\n';
+                    }
+                }
+                
+                document.getElementById('currentConfig').textContent = configText;
+                
+                // 更新表单值
+                document.getElementById('wkRegion').value = config.wk || '';
+                document.getElementById('customIP').value = config.p || '';
+                document.getElementById('preferredIPs').value = config.yx || '';
+                document.getElementById('socksConfig').value = config.s || '';
+                
+            } catch (error) {
+                document.getElementById('currentConfig').textContent = '加载配置失败: ' + error.message;
+            }
+        }
+        
+        async function saveConfig(configData) {
+            try {
+                const response = await fetch(window.location.pathname + '/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(configData)
+                });
+                
+                const result = await response.json();
+                showStatus(result.message, result.success ? 'success' : 'error');
+                
+                if (result.success) {
+                    await loadCurrentConfig();
+                }
+            } catch (error) {
+                showStatus('保存失败: ' + error.message, 'error');
+            }
+        }
+        
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('statusMessage');
+            statusDiv.textContent = message;
+            statusDiv.style.display = 'block';
+            statusDiv.style.color = type === 'success' ? '#00ff00' : '#ff0000';
+            statusDiv.style.borderColor = type === 'success' ? '#00ff00' : '#ff0000';
+            
+            setTimeout(function() {
+                statusDiv.style.display = 'none';
+            }, 3000);
+        }
+        
+        async function resetAllConfig() {
+            if (confirm('确定要重置所有配置吗？')) {
+                await saveConfig({});
             }
         }
         
         document.addEventListener('DOMContentLoaded', function() {
             createMatrixRain();
             checkSystemStatus();
+            checkKVStatus();
+            
+            // 绑定表单事件
+            const regionForm = document.getElementById('regionForm');
+            if (regionForm) {
+                regionForm.addEventListener('submit', async function(e) {
+                    e.preventDefault();
+                    const wkRegion = document.getElementById('wkRegion').value;
+                    await saveConfig({ wk: wkRegion });
+                });
+            }
+            
+            const otherConfigForm = document.getElementById('otherConfigForm');
+            if (otherConfigForm) {
+                otherConfigForm.addEventListener('submit', async function(e) {
+                    e.preventDefault();
+                    const configData = {
+                        p: document.getElementById('customIP').value,
+                        yx: document.getElementById('preferredIPs').value,
+                        s: document.getElementById('socksConfig').value
+                    };
+                    await saveConfig(configData);
+                });
+            }
         });
     </script>
 </body>
@@ -1807,4 +1944,48 @@ function generateLinksFromNewIPs(list, user, workerDomain) {
         links.push(link);
     });
     return links;
+}
+
+// 配置API处理函数
+async function handleConfigAPI(request) {
+    if (request.method === 'GET') {
+        // 获取当前配置
+        return new Response(JSON.stringify(kvConfig), {
+            headers: { 'Content-Type': 'application/json' }
+        });
+    } else if (request.method === 'POST') {
+        // 更新配置
+        try {
+            const newConfig = await request.json();
+            
+            // 更新KV配置
+            for (const [key, value] of Object.entries(newConfig)) {
+                if (value === '' || value === null || value === undefined) {
+                    delete kvConfig[key];
+                } else {
+                    kvConfig[key] = value;
+                }
+            }
+            
+            await saveKVConfig();
+            
+            return new Response(JSON.stringify({
+                success: true,
+                message: '配置已保存',
+                config: kvConfig
+            }), {
+                headers: { 'Content-Type': 'application/json' }
+            });
+        } catch (error) {
+            return new Response(JSON.stringify({
+                success: false,
+                message: '保存配置失败: ' + error.message
+            }), {
+                status: 500,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+    }
+    
+    return new Response('Method not allowed', { status: 405 });
 }
