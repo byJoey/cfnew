@@ -386,7 +386,32 @@ export default {
 
 			if (request.headers.get('Upgrade') === 'websocket') {
 				return await handleWsRequest(request);
-			} else if (request.method === 'GET') {
+			}
+			
+			// 配置管理API路由（支持GET和POST）
+			if (url.pathname.includes('/api/config')) {
+				const pathParts = url.pathname.split('/').filter(p => p);
+				// 查找UUID - 应该在 api 之前
+				const apiIndex = pathParts.indexOf('api');
+				if (apiIndex > 0) {
+					const user = pathParts[apiIndex - 1];
+					if (isValidFormat(user) && user === authToken) {
+						return await handleConfigAPI(request);
+					} else if (isValidFormat(user)) {
+						return new Response(JSON.stringify({ error: 'UUID错误' }), { 
+							status: 403,
+							headers: { 'Content-Type': 'application/json' }
+						});
+					}
+				}
+				// 如果路径格式不正确，返回JSON错误
+				return new Response(JSON.stringify({ error: '无效的API路径' }), { 
+					status: 404,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+			
+			if (request.method === 'GET') {
 				if (url.pathname === '/region') {
 					const customIP = env.p || env.P;
 					const manualRegion = env.wk || env.WK;
@@ -757,29 +782,6 @@ export default {
 							}
 						}
 					}
-				}
-				
-				// 配置管理API路由（放在订阅页面路径下）
-				if (url.pathname.includes('/api/config')) {
-					const pathParts = url.pathname.split('/').filter(p => p);
-					// 查找UUID - 应该在 api 之前
-					const apiIndex = pathParts.indexOf('api');
-					if (apiIndex > 0) {
-						const user = pathParts[apiIndex - 1];
-						if (isValidFormat(user) && user === authToken) {
-							return await handleConfigAPI(request);
-						} else if (isValidFormat(user)) {
-							return new Response(JSON.stringify({ error: 'UUID错误' }), { 
-								status: 403,
-								headers: { 'Content-Type': 'application/json' }
-							});
-						}
-					}
-					// 如果路径格式不正确，返回JSON错误
-					return new Response(JSON.stringify({ error: '无效的API路径' }), { 
-						status: 404,
-						headers: { 'Content-Type': 'application/json' }
-					});
 				}
 				if (url.pathname.toLowerCase().includes(`/${subPath}`)) {
 					return await handleSubscriptionRequest(request, authToken);
