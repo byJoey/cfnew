@@ -2246,7 +2246,7 @@ function generateLinksFromNewIPs(list, user, workerDomain) {
         if (CF_HTTPS_PORTS.includes(port)) {
             // CF HTTPS端口，生成TLS节点
             const wsNodeName = `${nodeName}-${port}-WS-TLS`;
-            const link = `${proto}://${user}@${item.ip}:${port}?encryption=none&security=tls&sni=${workerDomain}&fp=chrome&type=ws&host=${workerDomain}&path=${wsPath}#${encodeURIComponent(wsNodeName)}`;
+            const link = `${proto}://${user}@${item.ip}:${port}?encryption=none&security=tls&sni=${workerDomain}&alpn=h3&fp=random&allowInsecure=1&type=ws&host=${workerDomain}&path=${wsPath}#${encodeURIComponent(wsNodeName)}`;
             links.push(link);
         } else if (CF_HTTP_PORTS.includes(port)) {
             // CF HTTP端口，生成非TLS节点（除非启用了disableNonTLS）
@@ -2258,7 +2258,7 @@ function generateLinksFromNewIPs(list, user, workerDomain) {
         } else {
             // 非CF标准端口，只生成TLS节点（HTTP会被CF拦截）
             const wsNodeName = `${nodeName}-${port}-WS-TLS`;
-            const link = `${proto}://${user}@${item.ip}:${port}?encryption=none&security=tls&sni=${workerDomain}&fp=chrome&type=ws&host=${workerDomain}&path=${wsPath}#${encodeURIComponent(wsNodeName)}`;
+            const link = `${proto}://${user}@${item.ip}:${port}?encryption=none&security=tls&sni=${workerDomain}&alpn=h3&fp=random&allowInsecure=1&type=ws&host=${workerDomain}&path=${wsPath}#${encodeURIComponent(wsNodeName)}`;
             links.push(link);
         }
     });
