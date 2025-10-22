@@ -1033,7 +1033,9 @@ function generateLinksFromSource(list, user, workerDomain) {
                     encryption: 'none', 
                     security: 'tls', 
                     sni: workerDomain, 
-                    fp: 'chrome', 
+                    fp: 'random', 
+                    alph: 'h3', 
+                    allowInsecure: '1', 
                     type: 'ws', 
                     host: workerDomain, 
                     path: wsPath 
