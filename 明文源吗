@@ -1034,7 +1034,7 @@ function generateLinksFromSource(list, user, workerDomain) {
                     security: 'tls', 
                     sni: workerDomain, 
                     fp: 'random', 
-                    alph: 'h3', 
+                    alpn: 'h3', 
                     allowInsecure: '1', 
                     type: 'ws', 
                     host: workerDomain, 
