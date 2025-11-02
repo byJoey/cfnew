@@ -469,13 +469,12 @@ export default {
 				
 				const apiIndex = pathParts.indexOf('api');
 				if (apiIndex > 0) {
-					const pathSegments = pathParts.slice(0, apiIndex);
-					const pathIdentifier = pathSegments.join('/');
+					const pathIdentifier = pathParts[apiIndex - 1];
 					
 				let isValid = false;
 				if (cp && cp.trim()) {
 					
-					const cleanCustomPath = cp.trim().startsWith('/') ? cp.trim().substring(1) : cp.trim();
+					const cleanCustomPath = (cp.startsWith('/') ? cp : '/' + cp).replace(/^\//, '');
 					isValid = (pathIdentifier === cleanCustomPath);
 					} else {
 						
@@ -503,13 +502,12 @@ export default {
 			
 				const apiIndex = pathParts.indexOf('api');
 				if (apiIndex > 0) {
-				const pathSegments = pathParts.slice(0, apiIndex);
-				const pathIdentifier = pathSegments.join('/');
+				const pathIdentifier = pathParts[apiIndex - 1];
 				
 				let isValid = false;
 				if (cp && cp.trim()) {
 					
-					const cleanCustomPath = cp.trim().startsWith('/') ? cp.trim().substring(1) : cp.trim();
+					const cleanCustomPath = (cp.startsWith('/') ? cp : '/' + cp).replace(/^\//, '');
 					isValid = (pathIdentifier === cleanCustomPath);
 				} else {
 					
@@ -910,20 +908,24 @@ export default {
 				}
 			
 		if (cp && cp.trim()) {
-			const cleanCustomPath = cp.trim().startsWith('/') ? cp.trim() : '/' + cp.trim();
-			const normalizedCustomPath = cleanCustomPath.endsWith('/') && cleanCustomPath.length > 1 ? cleanCustomPath.slice(0, -1) : cleanCustomPath;
-			const normalizedPath = url.pathname.endsWith('/') && url.pathname.length > 1 ? url.pathname.slice(0, -1) : url.pathname;
+			const cleanCustomPath = cp.startsWith('/') ? cp : '/' + cp;
 				
-				if (normalizedPath === normalizedCustomPath) {
+				if (url.pathname === cleanCustomPath || url.pathname === cleanCustomPath + '/') {
 					return await handleSubscriptionPage(request, at);
 				}
 				
-				if (normalizedPath === normalizedCustomPath + '/sub') {
+				if (url.pathname === cleanCustomPath + '/sub') {
 					return await handleSubscriptionRequest(request, at, url);
 				}
 				
+				if (url.pathname === cleanCustomPath + '/auto') {
+					const autoUrl = new URL(request.url);
+					autoUrl.searchParams.set('target', 'auto');
+					return await handleSubscriptionRequest(request, at, autoUrl);
+				}
+				
 				if (url.pathname.length > 1 && url.pathname !== '/') {
-					const user = url.pathname.replace(/\/$/, '').replace('/sub', '').substring(1);
+					const user = url.pathname.replace(/\/$/, '').replace('/sub', '').replace('/auto', '').substring(1);
 					if (isValidFormat(user)) {
 						return new Response(JSON.stringify({ 
 							error: '访问被拒绝',
@@ -966,6 +968,25 @@ export default {
 						}
 					}
 				}
+				
+				if (url.pathname.includes('/auto')) {
+					const pathParts = url.pathname.split('/');
+					if (pathParts.length === 2 && pathParts[1] === 'auto') {
+						const user = pathParts[0].substring(1);
+						if (isValidFormat(user)) {
+							if (user === at) {
+								const autoUrl = new URL(request.url);
+								autoUrl.searchParams.set('target', 'auto');
+								return await handleSubscriptionRequest(request, user, autoUrl);
+							} else {
+								return new Response(JSON.stringify({ error: 'UUID错误' }), { 
+									status: 403,
+									headers: { 'Content-Type': 'application/json' }
+								});
+							}
+						}
+					}
+				}
 				if (url.pathname.toLowerCase().includes(`/${subPath}`)) {
 					return await handleSubscriptionRequest(request, at);
 				}
@@ -984,12 +1005,64 @@ function generateQuantumultConfig(links) {
 	return btoa(links.join('\n'));
 }
 
+function detectClientTypeFromUA(userAgent) {
+    if (!userAgent) return null;
+    
+    const ua = userAgent.toLowerCase();
+    
+    if (ua.includes('clash')) {
+        return atob('Y2xhc2g=');
+    }
+    
+    if (ua.includes('surge')) {
+        if (ua.includes('surge4')) {
+            return atob('c3VyZ2U0');
+        } else if (ua.includes('surge3')) {
+            return atob('c3VyZ2Uz');
+        } else {
+            return atob('c3VyZ2Uy');
+        }
+    }
+    
+    if (ua.includes('quantumult') || ua.includes('quanx')) {
+        return atob('cXVhbnR1bXVsdA==');
+    }
+    
+    if (ua.includes('v2ray') || ua.includes('v2rayu') || ua.includes('v2rayn')) {
+        return atob('djJyYXk=');
+    }
+    
+    if (ua.includes('loon')) {
+        return atob('bG9vbg==');
+    }
+    
+    if (ua.includes('shadowrocket')) {
+        return atob('c3VyZ2Uz');
+    }
+    
+    if (ua.includes('shadowsocks') || ua.includes('ssr')) {
+        return atob('c3M=');
+    }
+    
+    return null;
+}
+
 async function handleSubscriptionRequest(request, user, url = null) {
     if (!url) url = new URL(request.url);
     
     const finalLinks = [];
     const workerDomain = url.hostname;
-    const target = url.searchParams.get('target') || 'base64';
+    let target = url.searchParams.get('target');
+    
+    if (!target || target === 'base64' || target === 'auto') {
+        const userAgent = request.headers.get('User-Agent') || '';
+        const detectedTarget = detectClientTypeFromUA(userAgent);
+        if (detectedTarget) {
+            target = detectedTarget;
+        } else {
+            target = 'base64';
+        }
+    }
 
     async function addNodesFromList(list) {
         if (ev) {
@@ -1117,7 +1190,6 @@ async function handleSubscriptionRequest(request, user, url = null) {
             subscriptionContent = await generateClashConfig(finalLinks);
             contentType = 'text/yaml; charset=utf-8';
             break;
-        case atob('c3VyZ2U='):
         case atob('c3VyZ2Uy'):
         case atob('c3VyZ2Uz'):
         case atob('c3VyZ2U0'):
@@ -1158,7 +1230,7 @@ function generateLinksFromSource(list, user, workerDomain) {
     const defaultHttpsPorts = [443];
     const defaultHttpPorts = disableNonTLS ? [] : [80];
     const links = [];
-    const wsPath = '/';
+    const wsPath = encodeURIComponent('/');
     const proto = atob('dmxlc3M=');
 
     list.forEach(item => {
@@ -1233,7 +1305,7 @@ async function generateTrojanLinksFromSource(list, user, workerDomain) {
     const defaultHttpsPorts = [443];
     const defaultHttpPorts = disableNonTLS ? [] : [80];
     const links = [];
-    const wsPath = '/';
+    const wsPath = encodeURIComponent('/');
     
     const password = tp || user;
 
@@ -1813,7 +1885,7 @@ async function handleSubscriptionPage(request, user = null) {
     <div class="matrix-bg"></div>
     <div class="matrix-rain"></div>
     <div class="matrix-code-rain" id="matrixCodeRain"></div>
-    <div class="matrix-text">终端 v2.1</div>
+    <div class="matrix-text">终端 v2.0</div>
     <div class="container">
         <div class="header">
             <h1 class="title">代理订阅中心</h1>
@@ -1822,19 +1894,23 @@ async function handleSubscriptionPage(request, user = null) {
         <div class="card">
             <h2 class="card-title">[ 选择客户端 ]</h2>
             <div class="client-grid">
-                <button class="client-btn" onclick="generateClientLink(atob('Y2xhc2g='), 'CLASH')">CLASH</button>
-                <button class="client-btn" onclick="generateClientLink(atob('Y2xhc2g='), 'STASH')">STASH</button>
-                <button class="client-btn" onclick="generateClientLink(atob('c3VyZ2U='), 'SURGE')">SURGE</button>
-                <button class="client-btn" onclick="generateClientLink(atob('c2luZ2JveA=='), 'SING-BOX')">SING-BOX</button>
-                <button class="client-btn" onclick="generateClientLink(atob('bG9vbg=='), 'LOON')">LOON</button>
-                <button class="client-btn" onclick="generateClientLink(atob('cXVhbng='), 'QUANTUMULT X')">QUANTUMULT X</button>
-                <button class="client-btn" onclick="generateClientLink(atob('djJyYXk='), 'V2RAY')">V2RAY</button>
-                <button class="client-btn" onclick="generateClientLink(atob('djJyYXk='), 'V2RAYNG')">V2RAYNG</button>
-                <button class="client-btn" onclick="generateClientLink(atob('djJyYXk='), 'NEKORAY')">NEKORAY</button>
-                <button class="client-btn" onclick="generateClientLink(atob('djJyYXk='), 'Shadowrocket')">Shadowrocket</button>
-                <button class="client-btn" onclick="generateAutoLink()">自动识别</button>
+                <button class="client-btn" onclick="generateClientLink(atob('Y2xhc2g='))">CLASH</button>
+                <button class="client-btn" onclick="generateClientLink(atob('c3VyZ2U='))">SURGE</button>
+                <button class="client-btn" onclick="generateClientLink(atob('c2luZ2JveA=='))">SING-BOX</button>
+                <button class="client-btn" onclick="generateClientLink(atob('bG9vbg=='))">LOON</button>
+                <button class="client-btn" onclick="generateClientLink(atob('cXVhbng='))">QUANTUMULT X</button>
+                <button class="client-btn" onclick="generateClientLink(atob('djJyYXk='))">V2RAY</button>
+                <button class="client-btn" onclick="generateClientLink(atob('c2hhZG93cm9ja2V0'))">小火箭</button>
+                <button class="client-btn" onclick="generateClientLink(atob('c3Rhc2g='))">STASH</button>
+                <button class="client-btn" onclick="generateClientLink(atob('bmVrb3JheQ=='))">NEKORAY</button>
+                <button class="client-btn" onclick="generateClientLink(atob('djJyYXluZw=='))">V2RAYNG</button>
             </div>
             <div class=atob('c3Vic2NyaXB0aW9uLXVybA==') id="clientSubscriptionUrl"></div>
+        </div>
+        <div class="card">
+            <h2 class="card-title">[ 快速获取 ]</h2>
+            <button class="generate-btn" onclick="getBase64Subscription()">获取订阅链接</button>
+            <div class=atob('c3Vic2NyaXB0aW9uLXVybA==') id="base64SubscriptionUrl"></div>
         </div>
         <div class="card">
             <h2 class="card-title">[ 系统状态 ]</h2>
@@ -1902,7 +1978,6 @@ async function handleSubscriptionPage(request, user = null) {
                                 <small style="color: #00aa00; font-size: 0.8rem; display: block; margin-top: 5px;">设置自定义 Trojan 密码。留空则使用 UUID。客户端会自动对密码进行 SHA224 哈希。</small>
                             </div>
                             <small style="color: #00aa00; font-size: 0.85rem; display: block; margin-top: 10px;">可以同时启用多个协议。订阅将生成选中协议的节点。<br>• VLESS WS: 基于 atob('V2ViU29ja2V0') 的标准协议<br>• Trojan: 使用 SHA224 密码认证<br>• xhttp: 基于 HTTP POST 的伪装协议（需要绑定自定义域名并开启 gRPC）</small>
-                            <button type="button" id="saveProtocolBtn" style="margin-top: 15px; background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 10px 20px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease; width: 100%;">保存协议配置</button>
                         </div>
                     </div>
                     <div style="margin-bottom: 15px;">
@@ -2069,102 +2144,117 @@ async function handleSubscriptionPage(request, user = null) {
                 
                 if (!callbackExecuted) {
                     callbackExecuted = true;
-                    if (!appOpened && fallbackCallback) {
+                    if (!appOpened) {
                         fallbackCallback();
                     }
                 }
             }, timeout);
         }
         
-        function generateClientLink(clientType, clientName) {
+        function generateClientLink(clientType) {
             var currentUrl = window.location.href;
             var subscriptionUrl = currentUrl + "/sub";
-            var schemeUrl = '';
-            var displayName = clientName || '';
-            var finalUrl = subscriptionUrl;
             
             if (clientType === atob('djJyYXk=')) {
-                finalUrl = subscriptionUrl;
-                document.getElementById("clientSubscriptionUrl").textContent = finalUrl;
+                document.getElementById("clientSubscriptionUrl").textContent = subscriptionUrl;
                 document.getElementById("clientSubscriptionUrl").style.display = "block";
                 
-                if (clientName === 'V2RAY') {
-                    navigator.clipboard.writeText(finalUrl).then(function() {
-                        alert(displayName + " 订阅链接已复制");
+                tryOpenApp('v2ray://install?url=' + encodeURIComponent(subscriptionUrl), function() {
+                    navigator.clipboard.writeText(subscriptionUrl).then(function() {
+                        alert(decodeURIComponent(escape(atob('VjJSYXkg6K6i6ZiF6ZO+5o6l5bey5aSN5Yi2'))));
                     });
-                } else if (clientName === 'Shadowrocket') {
-                    schemeUrl = 'shadowrocket://add/' + encodeURIComponent(finalUrl);
-                    tryOpenApp(schemeUrl, function() {
-                        navigator.clipboard.writeText(finalUrl).then(function() {
-                            alert(displayName + " 订阅链接已复制");
-                        });
+                });
+            } else if (clientType === atob('c2hhZG93cm9ja2V0')) {
+                document.getElementById("clientSubscriptionUrl").textContent = subscriptionUrl;
+                document.getElementById("clientSubscriptionUrl").style.display = "block";
+                
+                tryOpenApp('shadowrocket://add/' + encodeURIComponent(subscriptionUrl), function() {
+                    navigator.clipboard.writeText(subscriptionUrl).then(function() {
+                        alert("小火箭订阅链接已复制");
                     });
-                } else if (clientName === 'V2RAYNG') {
-                    schemeUrl = 'v2rayng://install?url=' + encodeURIComponent(finalUrl);
-                    tryOpenApp(schemeUrl, function() {
-                        navigator.clipboard.writeText(finalUrl).then(function() {
-                            alert(displayName + " 订阅链接已复制");
-                        });
+                });
+            } else if (clientType === atob('djJyYXluZw==')) {
+                document.getElementById("clientSubscriptionUrl").textContent = subscriptionUrl;
+                document.getElementById("clientSubscriptionUrl").style.display = "block";
+                
+                tryOpenApp('v2rayng://install?url=' + encodeURIComponent(subscriptionUrl), function() {
+                    navigator.clipboard.writeText(subscriptionUrl).then(function() {
+                        alert("V2RayNG订阅链接已复制");
                     });
-                } else if (clientName === 'NEKORAY') {
-                    schemeUrl = 'nekoray://install-config?url=' + encodeURIComponent(finalUrl);
-                    tryOpenApp(schemeUrl, function() {
-                        navigator.clipboard.writeText(finalUrl).then(function() {
-                            alert(displayName + " 订阅链接已复制");
-                        });
-                    });
-                }
+                });
             } else {
                 var encodedUrl = encodeURIComponent(subscriptionUrl);
-                finalUrl = SUB_CONVERTER_URL + "?target=" + clientType + "&url=" + encodedUrl + "&insert=false";
-                document.getElementById("clientSubscriptionUrl").textContent = finalUrl;
+                var apiUrl = SUB_CONVERTER_URL + "?target=" + clientType + "&url=" + encodedUrl + "&insert=false";
+                document.getElementById("clientSubscriptionUrl").textContent = apiUrl;
                 document.getElementById("clientSubscriptionUrl").style.display = "block";
                 
+                var schemeUrl = '';
+                var displayName = clientType.toUpperCase();
+                
                 if (clientType === atob('Y2xhc2g=')) {
-                    if (clientName === 'STASH') {
-                        schemeUrl = 'stash://install?url=' + encodeURIComponent(finalUrl);
-                        displayName = 'STASH';
-                    } else {
-                        schemeUrl = 'clash://install-config?url=' + encodeURIComponent(finalUrl);
-                        displayName = 'CLASH';
-                    }
+                    schemeUrl = 'clash://install-config?url=' + encodeURIComponent(apiUrl);
+                    displayName = 'CLASH';
                 } else if (clientType === atob('c3VyZ2U=')) {
-                    schemeUrl = 'surge:///install-config?url=' + encodeURIComponent(finalUrl);
+                    schemeUrl = 'surge:///install-config?url=' + encodeURIComponent(apiUrl);
                     displayName = 'SURGE';
-                } else if (clientType === atob('c2luZ2JveA==')) {
-                    schemeUrl = 'sing-box://install-config?url=' + encodeURIComponent(finalUrl);
-                    displayName = 'SING-BOX';
-                } else if (clientType === atob('bG9vbg==')) {
-                    schemeUrl = 'loon://install?url=' + encodeURIComponent(finalUrl);
-                    displayName = 'LOON';
                 } else if (clientType === atob('cXVhbng=')) {
-                    schemeUrl = 'quantumult-x://install-config?url=' + encodeURIComponent(finalUrl);
+                    schemeUrl = 'quantumult-x://install-config?url=' + encodeURIComponent(apiUrl);
                     displayName = 'QUANTUMULT X';
+                } else if (clientType === atob('bG9vbg==')) {
+                    schemeUrl = 'loon://install?url=' + encodeURIComponent(apiUrl);
+                    displayName = 'LOON';
+                } else if (clientType === atob('c2luZ2JveA==')) {
+                    schemeUrl = 'sing-box://install-config?url=' + encodeURIComponent(apiUrl);
+                    displayName = 'SING-BOX';
+                } else if (clientType === atob('c2hhZG93cm9ja2V0')) {
+                    schemeUrl = 'shadowrocket://add/' + encodeURIComponent(apiUrl);
+                    displayName = '小火箭';
+                } else if (clientType === atob('c3Rhc2g=')) {
+                    schemeUrl = 'stash://install?url=' + encodeURIComponent(apiUrl);
+                    displayName = 'STASH';
+                } else if (clientType === atob('bmVrb3JheQ==')) {
+                    schemeUrl = 'nekoray://install-config?url=' + encodeURIComponent(apiUrl);
+                    displayName = 'NEKORAY';
+                } else if (clientType === atob('djJyYXluZw==')) {
+                    schemeUrl = 'v2rayng://install?url=' + encodeURIComponent(apiUrl);
+                    displayName = 'V2RAYNG';
                 }
                 
                 if (schemeUrl) {
                     tryOpenApp(schemeUrl, function() {
-                        navigator.clipboard.writeText(finalUrl).then(function() {
+                        navigator.clipboard.writeText(apiUrl).then(function() {
                             alert(displayName + " 订阅链接已复制");
                         });
                     });
                 } else {
-                    navigator.clipboard.writeText(finalUrl).then(function() {
+                    navigator.clipboard.writeText(apiUrl).then(function() {
                         alert(displayName + " 订阅链接已复制");
                     });
                 }
             }
         }
-        function generateAutoLink() {
+        function getBase64Subscription() {
             var currentUrl = window.location.href;
             var subscriptionUrl = currentUrl + "/sub";
-            var encodedUrl = encodeURIComponent(subscriptionUrl);
-            var apiUrl = SUB_CONVERTER_URL + "?target=auto&url=" + encodedUrl + "&insert=false";
-            document.getElementById("clientSubscriptionUrl").textContent = apiUrl;
-            document.getElementById("clientSubscriptionUrl").style.display = "block";
-            navigator.clipboard.writeText(apiUrl).then(function() {
-                alert("自动识别订阅链接已复制，客户端访问时会根据User-Agent自动识别并返回对应格式");
-            });
+            
+            fetch(subscriptionUrl)
+                .then(function(response) {
+                    return response.text();
+                })
+                .then(function(base64Content) {
+                    document.getElementById("base64SubscriptionUrl").textContent = base64Content;
+                    document.getElementById("base64SubscriptionUrl").style.display = "block";
+                    
+                    var schemeUrl = 'v2ray://install?content=' + encodeURIComponent(base64Content);
+                    tryOpenApp(schemeUrl, function() {
+                        navigator.clipboard.writeText(base64Content).then(function() {
+                            alert("Base64订阅内容已复制");
+                        });
+                    });
+                })
+                .catch(function(error) {
+                    alert("获取订阅失败，请重试");
+                });
         }
         
         function createMatrixRain() {
@@ -2612,28 +2702,6 @@ async function handleSubscriptionPage(request, user = null) {
                     e.preventDefault();
                     const wkRegion = document.getElementById('wkRegion').value;
                     await saveConfig({ wk: wkRegion });
-                });
-            }
-            
-            const saveProtocolBtn = document.getElementById('saveProtocolBtn');
-            if (saveProtocolBtn) {
-                saveProtocolBtn.addEventListener('click', async function(e) {
-                    e.preventDefault();
-                    const configData = { 
-                        ev: document.getElementById('ev').checked ? 'yes' : 'no', 
-                        et: document.getElementById('et').checked ? 'yes' : 'no', 
-                        ex: document.getElementById('ex').checked ? 'yes' : 'no', 
-                        tp: document.getElementById('tp').value
-                    };
-                    
-                    if (!document.getElementById('ev').checked && 
-                        !document.getElementById('et').checked && 
-                        !document.getElementById('ex').checked) {
-                        alert('至少需要启用一个协议！');
-                        return;
-                    }
-                    
-                    await saveConfig(configData);
                 });
             }
             
@@ -3344,7 +3412,7 @@ function generateLinksFromNewIPs(list, user, workerDomain) {
     const CF_HTTPS_PORTS = [443, 2053, 2083, 2087, 2096, 8443];
     
     const links = [];
-    const wsPath = '/';
+    const wsPath = encodeURIComponent('/');
     const proto = atob('dmxlc3M=');
     
     list.forEach(item => {
@@ -3408,7 +3476,7 @@ async function generateTrojanLinksFromNewIPs(list, user, workerDomain) {
     const CF_HTTPS_PORTS = [443, 2053, 2083, 2087, 2096, 8443];
     
     const links = [];
-    const wsPath = '/';
+    const wsPath = encodeURIComponent('/');
     
     const password = tp || user;
     
