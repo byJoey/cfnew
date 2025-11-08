@@ -1,4 +1,4 @@
-name: Generate and Obfuscate Worker Script
+name: 每天8点运行
 
 on:
   workflow_dispatch:
