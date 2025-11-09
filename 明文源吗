@@ -398,8 +398,8 @@ export default {
 				}
 			}
 
-			const dc = env.qj || env.QJ;
-			if (dc && downgradeControl.toLowerCase() === 'no') {
+			const downgradeControl = getConfigValue('qj', env.qj || env.QJ);
+			if (downgradeControl && downgradeControl.toLowerCase() === 'no') {
 				enableSocksDowngrade = true;
 			}
 
@@ -554,58 +554,111 @@ export default {
 			}
 			
 			if (request.method === 'GET') {
-				if (url.pathname === '/region') {
+				// 处理 /{UUID}/region 或 /{自定义路径}/region
+				if (url.pathname.endsWith('/region')) {
+					const pathParts = url.pathname.split('/').filter(p => p);
 					
-					const ci = getConfigValue('p', env.p || env.P);
-					const manualRegion = getConfigValue('wk', env.wk || env.WK);
-					
-					if (manualRegion && manualRegion.trim()) {
-						return new Response(JSON.stringify({
-							region: manualRegion.trim().toUpperCase(),
-							detectionMethod: '手动指定地区',
-							manualRegion: manualRegion.trim().toUpperCase(),
-							timestamp: new Date().toISOString()
-						}), {
-							headers: { 'Content-Type': 'application/json' }
-						});
-				} else if (ci && ci.trim()) {
-						return new Response(JSON.stringify({
-							region: 'CUSTOM',
-						detectionMethod: '自定义ProxyIP模式', ci: ci,
-							timestamp: new Date().toISOString()
-						}), {
-							headers: { 'Content-Type': 'application/json' }
-						});
-					} else {
-						const detectedRegion = await detectWorkerRegion(request);
-						return new Response(JSON.stringify({
-							region: detectedRegion,
-							detectionMethod: 'API检测',
-							timestamp: new Date().toISOString()
-						}), {
-							headers: { 'Content-Type': 'application/json' }
-						});
+					if (pathParts.length === 2 && pathParts[1] === 'region') {
+						const pathIdentifier = pathParts[0];
+						let isValid = false;
+						
+						if (cp && cp.trim()) {
+							// 使用自定义路径
+							const cleanCustomPath = cp.trim().startsWith('/') ? cp.trim().substring(1) : cp.trim();
+							isValid = (pathIdentifier === cleanCustomPath);
+						} else {
+							// 使用UUID路径
+							isValid = (isValidFormat(pathIdentifier) && pathIdentifier === at);
+						}
+						
+						if (isValid) {
+							const ci = getConfigValue('p', env.p || env.P);
+							const manualRegion = getConfigValue('wk', env.wk || env.WK);
+							
+							if (manualRegion && manualRegion.trim()) {
+								return new Response(JSON.stringify({
+									region: manualRegion.trim().toUpperCase(),
+									detectionMethod: '手动指定地区',
+									manualRegion: manualRegion.trim().toUpperCase(),
+									timestamp: new Date().toISOString()
+								}), {
+									headers: { 'Content-Type': 'application/json' }
+								});
+							} else if (ci && ci.trim()) {
+								return new Response(JSON.stringify({
+									region: 'CUSTOM',
+									detectionMethod: '自定义ProxyIP模式', ci: ci,
+									timestamp: new Date().toISOString()
+								}), {
+									headers: { 'Content-Type': 'application/json' }
+								});
+							} else {
+								const detectedRegion = await detectWorkerRegion(request);
+								return new Response(JSON.stringify({
+									region: detectedRegion,
+									detectionMethod: 'API检测',
+									timestamp: new Date().toISOString()
+								}), {
+									headers: { 'Content-Type': 'application/json' }
+								});
+							}
+						} else {
+							return new Response(JSON.stringify({ 
+								error: '访问被拒绝',
+								message: '路径验证失败'
+							}), { 
+								status: 403,
+								headers: { 'Content-Type': 'application/json' }
+							});
+						}
 					}
 				}
 				
-				if (url.pathname === '/test-api') {
-					try {
-						const testRegion = await detectWorkerRegion(request);
-						return new Response(JSON.stringify({
-							detectedRegion: testRegion,
-							message: 'API测试完成',
-							timestamp: new Date().toISOString()
-						}), {
-							headers: { 'Content-Type': 'application/json' }
-						});
-					} catch (error) {
-						return new Response(JSON.stringify({
-							error: error.message,
-							message: 'API测试失败'
-						}), {
-							status: 500,
-							headers: { 'Content-Type': 'application/json' }
-						});
+				// 处理 /{UUID}/test-api 或 /{自定义路径}/test-api
+				if (url.pathname.endsWith('/test-api')) {
+					const pathParts = url.pathname.split('/').filter(p => p);
+					
+					if (pathParts.length === 2 && pathParts[1] === 'test-api') {
+						const pathIdentifier = pathParts[0];
+						let isValid = false;
+						
+						if (cp && cp.trim()) {
+							// 使用自定义路径
+							const cleanCustomPath = cp.trim().startsWith('/') ? cp.trim().substring(1) : cp.trim();
+							isValid = (pathIdentifier === cleanCustomPath);
+						} else {
+							// 使用UUID路径
+							isValid = (isValidFormat(pathIdentifier) && pathIdentifier === at);
+						}
+						
+						if (isValid) {
+							try {
+								const testRegion = await detectWorkerRegion(request);
+								return new Response(JSON.stringify({
+									detectedRegion: testRegion,
+									message: 'API测试完成',
+									timestamp: new Date().toISOString()
+								}), {
+									headers: { 'Content-Type': 'application/json' }
+								});
+							} catch (error) {
+								return new Response(JSON.stringify({
+									error: error.message,
+									message: 'API测试失败'
+								}), {
+									status: 500,
+									headers: { 'Content-Type': 'application/json' }
+								});
+							}
+						} else {
+							return new Response(JSON.stringify({ 
+								error: '访问被拒绝',
+								message: '路径验证失败'
+							}), { 
+								status: 403,
+								headers: { 'Content-Type': 'application/json' }
+							});
+						}
 					}
 				}
 				
@@ -2798,7 +2851,7 @@ async function handleSubscriptionPage(request, user = null) {
                 let isCustomIPMode = false;
                 let isManualRegionMode = false;
                 try {
-                    const response = await fetch('/region');
+                    const response = await fetch(window.location.pathname + '/region');
                     const data = await response.json();
                     
                     if (data.region === 'CUSTOM') {
@@ -2940,7 +2993,7 @@ async function handleSubscriptionPage(request, user = null) {
                     
                     const t = translations[isFarsi ? 'fa' : 'zh'];
                     
-                const response = await fetch('/test-api');
+                const response = await fetch(window.location.pathname + '/test-api');
                 const data = await response.json();
                 
                 if (data.detectedRegion) {
