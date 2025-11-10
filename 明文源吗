@@ -1571,6 +1571,15 @@ async function fetchAndParseWetest(url) {
 }
 
 async function handleWsRequest(request) {
+    // 检测并设置当前Worker地区，确保WebSocket请求能正确进行就近匹配
+    if (!currentWorkerRegion || currentWorkerRegion === '') {
+        if (manualWorkerRegion && manualWorkerRegion.trim()) {
+            currentWorkerRegion = manualWorkerRegion.trim().toUpperCase();
+        } else {
+            currentWorkerRegion = await detectWorkerRegion(request);
+        }
+    }
+    
     const wsPair = new WebSocketPair();
     const [clientSock, serverSock] = Object.values(wsPair);
     serverSock.accept();
@@ -1931,7 +1940,7 @@ async function handleSubscriptionPage(request, user = null) {
                     KR: '🇰🇷 韩国', DE: '🇩🇪 德国', SE: '🇸🇪 瑞典', NL: '🇳🇱 荷兰',
                     FI: '🇫🇮 芬兰', GB: '🇬🇧 英国'
                 },
-                terminal: '终端 v2.2',
+                terminal: '终端 v2.3',
                 githubProject: 'GitHub 项目',
                 autoDetectClient: '自动识别',
 			selectionLogicText: '同地区 → 邻近地区 → 其他地区',
@@ -2038,7 +2047,7 @@ async function handleSubscriptionPage(request, user = null) {
                     KR: '🇰🇷 کره جنوبی', DE: '🇩🇪 آلمان', SE: '🇸🇪 سوئد', NL: '🇳🇱 هلند',
                     FI: '🇫🇮 فنلاند', GB: '🇬🇧 بریتانیا'
                 },
-                terminal: 'ترمینال v2.2',
+                terminal: 'ترمینال v2.3',
                 githubProject: 'پروژه GitHub',
                 autoDetectClient: 'تشخیص خودکار',
 			selectionLogicText: 'هم‌منطقه → منطقه مجاور → سایر مناطق',
