@@ -1,4 +1,4 @@
-name: Generate and Obfuscate Worker Script
+name: snippets
 
 on:
   workflow_dispatch:
