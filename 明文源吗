@@ -25,7 +25,7 @@
     // 远程配置URL（硬编码）
     const remoteConfigUrl = 'https://raw.githubusercontent.com/byJoey/test/refs/heads/main/tist.ini';
 
-    let epd = true;   
+    let epd = false;   // 优选域名默认关闭
     let epi = true;       
     let egi = true;          
 
@@ -434,7 +434,7 @@
                 
                 scu = getConfigValue('scu', env.scu) || 'https://url.v1.mk/sub';
                 
-                const preferredDomainsControl = getConfigValue('epd', env.epd);
+                const preferredDomainsControl = getConfigValue('epd', env.epd || 'no');
                 if (preferredDomainsControl !== undefined && preferredDomainsControl !== '') {
                     epd = preferredDomainsControl !== 'no' && preferredDomainsControl !== false && preferredDomainsControl !== 'false';
                 }
@@ -1390,7 +1390,10 @@
         const proto = atob('dmxlc3M=');
 
         list.forEach(item => {
-            const nodeNameBase = item.isp.replace(/\s/g, '_');
+            let nodeNameBase = item.isp.replace(/\s/g, '_');
+            if (item.colo && item.colo.trim()) {
+                nodeNameBase = `${nodeNameBase}-${item.colo.trim()}`;
+            }
             const safeIP = item.ip.includes(':') ? `[${item.ip}]` : item.ip;
             
             let portsToGenerate = [];
@@ -1465,7 +1468,10 @@
         const password = tp || user;
 
         list.forEach(item => {
-            const nodeNameBase = item.isp.replace(/\s/g, '_');
+            let nodeNameBase = item.isp.replace(/\s/g, '_');
+            if (item.colo && item.colo.trim()) {
+                nodeNameBase = `${nodeNameBase}-${item.colo.trim()}`;
+            }
             const safeIP = item.ip.includes(':') ? `[${item.ip}]` : item.ip;
             
             let portsToGenerate = [];
@@ -1525,12 +1531,40 @@
         const v6Url1 = "https://www.wetest.vip/page/cloudflare/address_v6.html";
         let results = [];
 
+        // 读取筛选配置（默认全部启用）
+        const ipv4Enabled = getConfigValue('ipv4', '') === '' || getConfigValue('ipv4', 'yes') !== 'no';
+        const ipv6Enabled = getConfigValue('ipv6', '') === '' || getConfigValue('ipv6', 'yes') !== 'no';
+        const ispMobile = getConfigValue('ispMobile', '') === '' || getConfigValue('ispMobile', 'yes') !== 'no';
+        const ispUnicom = getConfigValue('ispUnicom', '') === '' || getConfigValue('ispUnicom', 'yes') !== 'no';
+        const ispTelecom = getConfigValue('ispTelecom', '') === '' || getConfigValue('ispTelecom', 'yes') !== 'no';
+
         try {
-            const [ipv4List, ipv6List] = await Promise.all([
-                fetchAndParseWetest(v4Url1),
-                fetchAndParseWetest(v6Url1)
-            ]);
+            const fetchPromises = [];
+            if (ipv4Enabled) {
+                fetchPromises.push(fetchAndParseWetest(v4Url1));
+            } else {
+                fetchPromises.push(Promise.resolve([]));
+            }
+            if (ipv6Enabled) {
+                fetchPromises.push(fetchAndParseWetest(v6Url1));
+            } else {
+                fetchPromises.push(Promise.resolve([]));
+            }
+
+            const [ipv4List, ipv6List] = await Promise.all(fetchPromises);
             results = [...ipv4List, ...ipv6List];
+            
+            // 按运营商筛选
+            if (results.length > 0) {
+                results = results.filter(item => {
+                    const isp = item.isp || '';
+                    if (isp.includes('移动') && !ispMobile) return false;
+                    if (isp.includes('联通') && !ispUnicom) return false;
+                    if (isp.includes('电信') && !ispTelecom) return false;
+                    return true;
+                });
+            }
+            
             if (results.length > 0) {
                 return results;
             }
@@ -1549,16 +1583,18 @@
             const html = await response.text();
             const results = [];
             const rowRegex = /<tr[\s\S]*?<\/tr>/g;
-            const cellRegex = /<td data-label="线路名称">(.+?)<\/td>[\s\S]*?<td data-label="优选地址">([\d.:a-fA-F]+)<\/td>/;
+            const cellRegex = /<td data-label="线路名称">(.+?)<\/td>[\s\S]*?<td data-label="优选地址">([\d.:a-fA-F]+)<\/td>[\s\S]*?<td data-label="数据中心">(.+?)<\/td>/;
 
             let match;
             while ((match = rowRegex.exec(html)) !== null) {
                 const rowHtml = match[0];
                 const cellMatch = rowHtml.match(cellRegex);
                 if (cellMatch && cellMatch[1] && cellMatch[2]) {
+                    const colo = cellMatch[3] ? cellMatch[3].trim().replace(/<.*?>/g, '') : '';
                     results.push({
                         isp: cellMatch[1].trim().replace(/<.*?>/g, ''),
-                        ip: cellMatch[2].trim()
+                        ip: cellMatch[2].trim(),
+                        colo: colo
                     });
                 }
             }
@@ -1942,7 +1978,7 @@
                         KR: '🇰🇷 韩国', DE: '🇩🇪 德国', SE: '🇸🇪 瑞典', NL: '🇳🇱 荷兰',
                         FI: '🇫🇮 芬兰', GB: '🇬🇧 英国'
                     },
-                    terminal: '终端 v2.5.0',
+                    terminal: '终端 v2.6',
                     githubProject: 'GitHub 项目',
                     autoDetectClient: '自动识别',
                 selectionLogicText: '同地区 → 邻近地区 → 其他地区',
@@ -2444,7 +2480,7 @@
                             <div style="padding: 15px; background: rgba(0, 20, 0, 0.6); border: 1px solid #00ff00; border-radius: 5px;">
                                 <div style="margin-bottom: 10px;">
                                     <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
-                                        <input type="checkbox" id="epd" checked style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
+                                        <input type="checkbox" id="epd" style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                             <span style="font-size: 1.1rem;">${t.enablePreferredDomain}</span>
                                     </label>
                                 </div>
@@ -2461,6 +2497,42 @@
                                     </label>
                                 </div>
                                     <small style="color: #00aa00; font-size: 0.85rem; display: block; margin-top: 10px;">${t.builtinPreferredHint}</small>
+                            </div>
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">优选IP筛选设置</label>
+                            <div style="padding: 15px; background: rgba(0, 20, 0, 0.6); border: 1px solid #00ff00; border-radius: 5px;">
+                                <div style="margin-bottom: 15px;">
+                                    <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">IP版本选择</label>
+                                    <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                            <input type="checkbox" id="ipv4Enabled" checked style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
+                                            <span style="font-size: 1rem;">IPv4</span>
+                                        </label>
+                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                            <input type="checkbox" id="ipv6Enabled" checked style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
+                                            <span style="font-size: 1rem;">IPv6</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div style="margin-bottom: 10px;">
+                                    <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">运营商选择</label>
+                                    <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                            <input type="checkbox" id="ispMobile" checked style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
+                                            <span style="font-size: 1rem;">移动</span>
+                                        </label>
+                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                            <input type="checkbox" id="ispUnicom" checked style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
+                                            <span style="font-size: 1rem;">联通</span>
+                                        </label>
+                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                            <input type="checkbox" id="ispTelecom" checked style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
+                                            <span style="font-size: 1rem;">电信</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                    <small style="color: #00aa00; font-size: 0.85rem; display: block; margin-top: 10px;">选择要使用的IP版本和运营商，未选中的将被过滤</small>
                             </div>
                         </div>
                         <div style="margin-bottom: 15px;">
@@ -3210,6 +3282,11 @@
                     document.getElementById('epd').checked = config.epd !== 'no';
                     document.getElementById('epi').checked = config.epi !== 'no';
                     document.getElementById('egi').checked = config.egi !== 'no';
+                    if (document.getElementById('ipv4Enabled')) document.getElementById('ipv4Enabled').checked = config.ipv4 !== 'no';
+                    if (document.getElementById('ipv6Enabled')) document.getElementById('ipv6Enabled').checked = config.ipv6 !== 'no';
+                    if (document.getElementById('ispMobile')) document.getElementById('ispMobile').checked = config.ispMobile !== 'no';
+                    if (document.getElementById('ispUnicom')) document.getElementById('ispUnicom').checked = config.ispUnicom !== 'no';
+                    if (document.getElementById('ispTelecom')) document.getElementById('ispTelecom').checked = config.ispTelecom !== 'no';
                     document.getElementById('customPath').value = config.d || '';
                     document.getElementById('customIP').value = config.p || '';
                     document.getElementById('preferredIPs').value = config.yx || '';
@@ -3364,6 +3441,7 @@
                                 qj: '',
                                 dkby: '',
                                 yxby: '', ev: '', et: '', ex: '', tp: '', scu: '', epd: '', epi: '', egi: '',
+                                ipv4: '', ipv6: '', ispMobile: '', ispUnicom: '', ispTelecom: '',
                                 homepage: ''
                             })
                         });
@@ -3483,7 +3561,12 @@
                             rm: document.getElementById('regionMatching').value,
                             qj: document.getElementById('downgradeControl').value,
                             dkby: document.getElementById('portControl').value,
-                            yxby: document.getElementById('preferredControl').value
+                            yxby: document.getElementById('preferredControl').value,
+                            ipv4: document.getElementById('ipv4Enabled').checked ? 'yes' : 'no',
+                            ipv6: document.getElementById('ipv6Enabled').checked ? 'yes' : 'no',
+                            ispMobile: document.getElementById('ispMobile').checked ? 'yes' : 'no',
+                            ispUnicom: document.getElementById('ispUnicom').checked ? 'yes' : 'no',
+                            ispTelecom: document.getElementById('ispTelecom').checked ? 'yes' : 'no'
                         };
                         await saveConfig(configData);
                     });
@@ -4192,7 +4275,10 @@
         const nodePath = user.substring(0, 8);
         
         list.forEach(item => {
-            const nodeNameBase = item.isp.replace(/\s/g, '_');
+            let nodeNameBase = item.isp.replace(/\s/g, '_');
+            if (item.colo && item.colo.trim()) {
+                nodeNameBase = `${nodeNameBase}-${item.colo.trim()}`;
+            }
             const safeIP = item.ip.includes(':') ? `[${item.ip}]` : item.ip;
             const port = item.port || 443;
             
@@ -4626,7 +4712,7 @@
         
         scu = getConfigValue('scu', '') || 'https://url.v1.mk/sub';
         
-        const preferredDomainsControl = getConfigValue('epd', '');
+        const preferredDomainsControl = getConfigValue('epd', 'no');
         if (preferredDomainsControl !== undefined && preferredDomainsControl !== '') {
             epd = preferredDomainsControl !== 'no' && preferredDomainsControl !== false && preferredDomainsControl !== 'false';
         }
