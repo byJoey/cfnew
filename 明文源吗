@@ -189,10 +189,10 @@
                 }
             }
             
-            return 'HK';
+            return 'SG';
             
         } catch (error) {
-            return 'HK';
+            return 'SG';
         }
     }
 
