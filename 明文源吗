@@ -1,3 +1,4 @@
+    // @ts-nocheck
     import { connect } from 'cloudflare:sockets';
 
     let at = '351c9981-04b6-4103-aa4b-864aa9c91469';
@@ -36,7 +37,6 @@
         'US': ['🇺🇸 美国', 'US', 'United States'],
         'SG': ['🇸🇬 新加坡', 'SG', 'Singapore'],
         'JP': ['🇯🇵 日本', 'JP', 'Japan'],
-        'HK': ['🇭🇰 香港', 'HK', 'Hong Kong'],
         'KR': ['🇰🇷 韩国', 'KR', 'South Korea'],
         'DE': ['🇩🇪 德国', 'DE', 'Germany'],
         'SE': ['🇸🇪 瑞典', 'SE', 'Sweden'],
@@ -53,7 +53,6 @@
         { domain: 'ProxyIP.US.CMLiussss.net', region: 'US', regionCode: 'US', port: 443 },
         { domain: 'ProxyIP.SG.CMLiussss.net', region: 'SG', regionCode: 'SG', port: 443 },
         { domain: 'ProxyIP.JP.CMLiussss.net', region: 'JP', regionCode: 'JP', port: 443 },
-        { domain: 'ProxyIP.HK.CMLiussss.net', region: 'HK', regionCode: 'HK', port: 443 },
         { domain: 'ProxyIP.KR.CMLiussss.net', region: 'KR', regionCode: 'KR', port: 443 },
         { domain: 'ProxyIP.DE.CMLiussss.net', region: 'DE', regionCode: 'DE', port: 443 },
         { domain: 'ProxyIP.SE.CMLiussss.net', region: 'SE', regionCode: 'SE', port: 443 },
@@ -177,9 +176,9 @@
             
             if (cfCountry) {
                 const countryToRegion = {
-                    'US': 'US', 'SG': 'SG', 'JP': 'JP', 'HK': 'HK', 'KR': 'KR',
+                    'US': 'US', 'SG': 'SG', 'JP': 'JP', 'KR': 'KR',
                     'DE': 'DE', 'SE': 'SE', 'NL': 'NL', 'FI': 'FI', 'GB': 'GB',
-                    'CN': 'HK', 'TW': 'HK', 'AU': 'SG', 'CA': 'US',
+                    'CN': 'SG', 'TW': 'JP', 'AU': 'SG', 'CA': 'US',
                     'FR': 'DE', 'IT': 'DE', 'ES': 'DE', 'CH': 'DE',
                     'AT': 'DE', 'BE': 'NL', 'DK': 'SE', 'NO': 'SE', 'IE': 'GB'
                 };
@@ -238,11 +237,10 @@
 
     function getNearbyRegions(region) {
         const nearbyMap = {
-            'US': ['SG', 'JP', 'HK', 'KR'], 
-            'SG': ['JP', 'HK', 'KR', 'US'], 
-            'JP': ['SG', 'HK', 'KR', 'US'], 
-            'HK': ['SG', 'JP', 'KR', 'US'], 
-            'KR': ['JP', 'HK', 'SG', 'US'], 
+            'US': ['SG', 'JP', 'KR'], 
+            'SG': ['JP', 'KR', 'US'], 
+            'JP': ['SG', 'KR', 'US'], 
+            'KR': ['JP', 'SG', 'US'], 
             'DE': ['NL', 'GB', 'SE', 'FI'], 
             'SE': ['DE', 'NL', 'FI', 'GB'], 
             'NL': ['DE', 'GB', 'SE', 'FI'], 
@@ -255,7 +253,7 @@
 
     function getAllRegionsByPriority(region) {
         const nearbyRegions = getNearbyRegions(region);
-        const allRegions = ['US', 'SG', 'JP', 'HK', 'KR', 'DE', 'SE', 'NL', 'FI', 'GB'];
+        const allRegions = ['US', 'SG', 'JP', 'KR', 'DE', 'SE', 'NL', 'FI', 'GB'];
         
         return [region, ...nearbyRegions, ...allRegions.filter(r => r !== region && !nearbyRegions.includes(r))];
     }
@@ -1150,6 +1148,10 @@
                         return await handleSubscriptionRequest(request, at, url);
                     }
                     
+                    if (normalizedPath === normalizedCustomPath + '/latency-test') {
+                        return await handleLatencyTestPage(request);
+                    }
+                    
                     if (url.pathname.length > 1 && url.pathname !== '/') {
                         const user = url.pathname.replace(/\/$/, '').replace('/sub', '').substring(1);
                         if (isValidFormat(user)) {
@@ -1193,6 +1195,10 @@
                                 }
                             }
                         }
+                    }
+                    
+                    if (url.pathname.includes('/latency-test')) {
+                        return await handleLatencyTestPage(request);
                     }
                     if (url.pathname.toLowerCase().includes(`/${subPath}`)) {
                         return await handleSubscriptionRequest(request, at);
@@ -1870,6 +1876,7 @@
         if (!user) user = at;
         
         const url = new URL(request.url);
+        
         // 优先检查Cookie中的语言设置
         const cookieHeader = request.headers.get('Cookie') || '';
         let langFromCookie = null;
@@ -1998,11 +2005,11 @@
                     preferredControlYes: '关闭优选',
                     preferredControlHint: '设置为"关闭优选"时只使用原生地址，不生成优选IP和域名节点',
                     regionNames: {
-                        US: '🇺🇸 美国', SG: '🇸🇬 新加坡', JP: '🇯🇵 日本', HK: '🇭🇰 香港',
+                        US: '🇺🇸 美国', SG: '🇸🇬 新加坡', JP: '🇯🇵 日本',
                         KR: '🇰🇷 韩国', DE: '🇩🇪 德国', SE: '🇸🇪 瑞典', NL: '🇳🇱 荷兰',
                         FI: '🇫🇮 芬兰', GB: '🇬🇧 英国'
                     },
-                    terminal: '终端 v2.6',
+                    terminal: '终端 v2.7',
                     githubProject: 'GitHub 项目',
                     autoDetectClient: '自动识别',
                 selectionLogicText: '同地区 → 邻近地区 → 其他地区',
@@ -2129,11 +2136,11 @@
                     preferredControlYes: 'بستن ترجیح',
                     preferredControlHint: 'وقتی "بستن ترجیح" تنظیم شود، فقط از آدرس اصلی استفاده می‌شود، گره‌های IP و دامنه ترجیحی تولید نمی‌شوند',
                     regionNames: {
-                        US: '🇺🇸 آمریکا', SG: '🇸🇬 سنگاپور', JP: '🇯🇵 ژاپن', HK: '🇭🇰 هنگ‌کنگ',
+                        US: '🇺🇸 آمریکا', SG: '🇸🇬 سنگاپور', JP: '🇯🇵 ژاپن',
                         KR: '🇰🇷 کره جنوبی', DE: '🇩🇪 آلمان', SE: '🇸🇪 سوئد', NL: '🇳🇱 هلند',
                         FI: '🇫🇮 فنلاند', GB: '🇬🇧 بریتانیا'
                     },
-                    terminal: 'ترمینال v2.5.0',
+                    terminal: 'ترمینال v2.7',
                     githubProject: 'پروژه GitHub',
                     autoDetectClient: 'تشخیص خودکار',
                 selectionLogicText: 'هم‌منطقه → منطقه مجاور → سایر مناطق',
@@ -2440,7 +2447,6 @@
                                     <option value="US">${t.regionNames.US}</option>
                                     <option value="SG">${t.regionNames.SG}</option>
                                     <option value="JP">${t.regionNames.JP}</option>
-                                    <option value="HK">${t.regionNames.HK}</option>
                                     <option value="KR">${t.regionNames.KR}</option>
                                     <option value="DE">${t.regionNames.DE}</option>
                                     <option value="SE">${t.regionNames.SE}</option>
@@ -2500,65 +2506,19 @@
                         </div>
                         <div style="margin-bottom: 15px;">
                                 <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.preferredIPs}</label>
-                                <input type="text" id="preferredIPs" placeholder="${isFarsi ? 'مثال: 1.2.3.4:443#گره هنگ‌کنگ,5.6.7.8:80#گره آمریکا,example.com:8443#گره سنگاپور' : '例如: 1.2.3.4:443#香港节点,5.6.7.8:80#美国节点,example.com:8443#新加坡节点'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                                <input type="text" id="yx" placeholder="${isFarsi ? 'مثال: 1.2.3.4:443#گره هنگ‌کنگ,5.6.7.8:80#گره آمریکا,example.com:8443#گره سنگاپور' : '例如: 1.2.3.4:443#日本节点,5.6.7.8:80#美国节点,example.com:8443#新加坡节点'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
                                 <small style="color: #00aa00; font-size: 0.85rem;">${isFarsi ? 'فرمت: IP:پورت#نام گره یا IP:پورت (بدون # از نام پیش‌فرض استفاده می‌شود). پشتیبانی از چندین مورد، با کاما جدا می‌شوند. <span style="color: #ffaa00;">IP های اضافه شده از طریق API به طور خودکار در اینجا نمایش داده می‌شوند.</span>' : '格式: IP:端口#节点名称 或 IP:端口 (无#则使用默认名称)。支持多个，用逗号分隔。<span style="color: #ffaa00;">API添加的IP会自动显示在这里。</span>'}</small>
                         </div>
                         <div style="margin-bottom: 15px;">
                                 <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.preferredIPsURL}</label>
-                                <input type="text" id="preferredIPsURL" placeholder="${isFarsi ? 'پیش‌فرض: https://raw.githubusercontent.com/qwer-search/bestip/refs/heads/main/kejilandbestip.txt' : '默认: https://raw.githubusercontent.com/qwer-search/bestip/refs/heads/main/kejilandbestip.txt'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                                <input type="text" id="yxURL" placeholder="${isFarsi ? 'پیش‌فرض: https://raw.githubusercontent.com/qwer-search/bestip/refs/heads/main/kejilandbestip.txt' : '默认: https://raw.githubusercontent.com/qwer-search/bestip/refs/heads/main/kejilandbestip.txt'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
                                 <small style="color: #00aa00; font-size: 0.85rem;">${isFarsi ? 'URL منبع لیست IP ترجیحی سفارشی، اگر خالی بگذارید از آدرس پیش‌فرض استفاده می‌شود' : '自定义优选IP列表来源URL，留空则使用默认地址'}</small>
                         </div>
                         
                         <div style="margin-bottom: 20px; padding: 15px; background: rgba(0, 40, 0, 0.6); border: 2px solid #00aa00; border-radius: 8px;">
                             <h4 style="color: #00ff00; margin: 0 0 15px 0; font-size: 1.1rem; text-shadow: 0 0 5px #00ff00;">⚡ ${t.latencyTest}</h4>
-                            <div style="display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; align-items: center;">
-                                <div style="min-width: 120px;">
-                                    <label style="display: block; margin-bottom: 5px; color: #00ff00; font-size: 0.9rem;">${t.ipSource}</label>
-                                    <select id="ipSourceSelect" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 13px; cursor: pointer;">
-                                        <option value="manual">${t.manualInput}</option>
-                                        <option value="cfRandom">${t.cfRandomIP}</option>
-                                        <option value="urlFetch">${t.urlFetch}</option>
-                                    </select>
-                                </div>
-                                <div style="width: 100px;">
-                                    <label style="display: block; margin-bottom: 5px; color: #00ff00; font-size: 0.9rem;">${t.latencyTestPort}</label>
-                                    <input type="number" id="latencyTestPort" value="443" min="1" max="65535" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 13px;">
-                                </div>
-                                <div id="randomCountDiv" style="width: 100px; display: none;">
-                                    <label style="display: block; margin-bottom: 5px; color: #00ff00; font-size: 0.9rem;">${t.randomCount}</label>
-                                    <input type="number" id="randomIPCount" value="20" min="1" max="100" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 13px;">
-                                </div>
-                            </div>
-                            <div id="manualInputDiv" style="margin-bottom: 10px;">
-                                <label style="display: block; margin-bottom: 5px; color: #00ff00; font-size: 0.9rem;">${t.latencyTestIP}</label>
-                                <input type="text" id="latencyTestInput" placeholder="${t.latencyTestIPPlaceholder}" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 13px;">
-                            </div>
-                            <div id="urlFetchDiv" style="margin-bottom: 10px; display: none;">
-                                <label style="display: block; margin-bottom: 5px; color: #00ff00; font-size: 0.9rem;">${t.fetchURL}</label>
-                                <div style="display: flex; gap: 8px;">
-                                    <input type="text" id="fetchURLInput" placeholder="${t.fetchURLPlaceholder}" style="flex: 1; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 13px;">
-                                    <button type="button" id="fetchIPBtn" style="background: rgba(0, 200, 255, 0.2); border: 1px solid #00aaff; padding: 8px 16px; color: #00aaff; font-family: 'Courier New', monospace; cursor: pointer; white-space: nowrap;">⬇ ${t.fetchIP}</button>
-                                </div>
-                            </div>
-                            <div id="cfRandomDiv" style="margin-bottom: 10px; display: none;">
-                                <button type="button" id="generateCFIPBtn" style="background: rgba(255, 200, 0, 0.2); border: 1px solid #ffaa00; padding: 10px 20px; color: #ffaa00; font-family: 'Courier New', monospace; cursor: pointer; width: 100%;">🎲 ${t.generateIP}</button>
-                            </div>
-                            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                                <button type="button" id="startLatencyTest" style="background: rgba(0, 255, 0, 0.2); border: 1px solid #00ff00; padding: 8px 16px; color: #00ff00; font-family: 'Courier New', monospace; cursor: pointer; transition: all 0.3s;">▶ ${t.startTest}</button>
-                                <button type="button" id="stopLatencyTest" style="background: rgba(255, 0, 0, 0.2); border: 1px solid #ff4444; padding: 8px 16px; color: #ff4444; font-family: 'Courier New', monospace; cursor: pointer; display: none; transition: all 0.3s;">⏹ ${t.stopTest}</button>
-                            </div>
-                            <div id="latencyTestStatus" style="color: #00aa00; font-size: 0.9rem; margin-bottom: 10px; display: none;"></div>
-                            <div id="latencyTestResults" style="max-height: 250px; overflow-y: auto; display: none;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                                    <span style="color: #00ff00; font-weight: bold;">${t.testResult}</span>
-                                    <div style="display: flex; gap: 8px;">
-                                        <button type="button" id="selectAllResults" style="background: transparent; border: 1px solid #00aa00; padding: 4px 10px; color: #00aa00; font-size: 0.8rem; cursor: pointer;">${t.selectAll}</button>
-                                        <button type="button" id="deselectAllResults" style="background: transparent; border: 1px solid #00aa00; padding: 4px 10px; color: #00aa00; font-size: 0.8rem; cursor: pointer;">${t.deselectAll}</button>
-                                    </div>
-                                </div>
-                                <div id="latencyResultsList" style="background: rgba(0, 0, 0, 0.5); border: 1px solid #004400; border-radius: 4px; padding: 10px;"></div>
-                                <button type="button" id="addSelectedToYx" style="margin-top: 10px; background: rgba(0, 200, 0, 0.3); border: 1px solid #00ff00; padding: 10px 20px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; width: 100%; transition: all 0.3s;">✓ ${t.addSelectedToYx}</button>
-                            </div>
+                            <p style="color: #00aa00; font-size: 0.9rem; margin-bottom: 15px;">${isFarsi ? 'برای تست تأخیر، یک پنجره HTTP جدید باز می‌شود. پس از تست، نتایج انتخاب شده به اینجا برگردانده می‌شوند.' : '点击下方按钮打开延迟测试窗口（使用HTTP协议直接测试IP）。测试完成后选中的结果会自动写回此页面。'}</p>
+                            <button type="button" id="openLatencyTestBtn" style="background: rgba(0, 255, 0, 0.2); border: 2px solid #00ff00; padding: 12px 24px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; width: 100%; transition: all 0.3s; font-size: 1rem;">🚀 ${isFarsi ? 'باز کردن پنجره تست تأخیر' : '打开延迟测试窗口'}</button>
                         </div>
                         
                         <div style="margin-bottom: 15px;">
@@ -2992,7 +2952,7 @@
                                 currentIP: '当前使用IP: ',
                                 regionMatch: '地区匹配: ',
                                 regionNames: {
-                        'US': '🇺🇸 美国', 'SG': '🇸🇬 新加坡', 'JP': '🇯🇵 日本', 'HK': '🇭🇰 香港',
+                        'US': '🇺🇸 美国', 'SG': '🇸🇬 新加坡', 'JP': '🇯🇵 日本',
                         'KR': '🇰🇷 韩国', 'DE': '🇩🇪 德国', 'SE': '🇸🇪 瑞典', 'NL': '🇳🇱 荷兰',
                         'FI': '🇫🇮 芬兰', 'GB': '🇬🇧 英国'
                                 },
@@ -3017,7 +2977,7 @@
                                 currentIP: 'IP فعلی: ',
                                 regionMatch: 'تطبیق منطقه: ',
                                 regionNames: {
-                                    'US': '🇺🇸 آمریکا', 'SG': '🇸🇬 سنگاپور', 'JP': '🇯🇵 ژاپن', 'HK': '🇭🇰 هنگ‌کنگ',
+                                    'US': '🇺🇸 آمریکا', 'SG': '🇸🇬 سنگاپور', 'JP': '🇯🇵 ژاپن',
                                     'KR': '🇰🇷 کره جنوبی', 'DE': '🇩🇪 آلمان', 'SE': '🇸🇪 سوئد', 'NL': '🇳🇱 هلند',
                                     'FI': '🇫🇮 فنلاند', 'GB': '🇬🇧 بریتانیا'
                                 },
@@ -3390,8 +3350,8 @@
                     if (document.getElementById('ispTelecom')) document.getElementById('ispTelecom').checked = config.ispTelecom !== 'no';
                     document.getElementById('customPath').value = config.d || '';
                     document.getElementById('customIP').value = config.p || '';
-                    document.getElementById('preferredIPs').value = config.yx || '';
-                    document.getElementById('preferredIPsURL').value = config.yxURL || '';
+                    document.getElementById('yx').value = config.yx || '';
+                    document.getElementById('yxURL').value = config.yxURL || '';
                     document.getElementById('socksConfig').value = config.s || '';
                     document.getElementById('customHomepage').value = config.homepage || '';
                     document.getElementById('apiEnabled').value = config.ae || '';
@@ -3636,8 +3596,8 @@
                         const configData = { ev: document.getElementById('ev').checked ? 'yes' : 'no', et: document.getElementById('et').checked ? 'yes' : 'no', ex: document.getElementById('ex').checked ? 'yes' : 'no', tp: document.getElementById('tp').value,
                             d: document.getElementById('customPath').value,
                             p: document.getElementById('customIP').value,
-                            yx: document.getElementById('preferredIPs').value,
-                            yxURL: document.getElementById('preferredIPsURL').value,
+                            yx: document.getElementById('yx').value,
+                            yxURL: document.getElementById('yxURL').value,
                             s: document.getElementById('socksConfig').value,
                             homepage: document.getElementById('customHomepage').value
                         };
@@ -3673,335 +3633,16 @@
                     });
                 }
                 
-                let testAbortController = null;
-                let testResults = [];
-                
-                const startTestBtn = document.getElementById('startLatencyTest');
-                const stopTestBtn = document.getElementById('stopLatencyTest');
-                const testStatus = document.getElementById('latencyTestStatus');
-                const testResultsDiv = document.getElementById('latencyTestResults');
-                const resultsList = document.getElementById('latencyResultsList');
-                const addSelectedBtn = document.getElementById('addSelectedToYx');
-                const selectAllBtn = document.getElementById('selectAllResults');
-                const deselectAllBtn = document.getElementById('deselectAllResults');
-                const ipSourceSelect = document.getElementById('ipSourceSelect');
-                const manualInputDiv = document.getElementById('manualInputDiv');
-                const urlFetchDiv = document.getElementById('urlFetchDiv');
-                const cfRandomDiv = document.getElementById('cfRandomDiv');
-                const randomCountDiv = document.getElementById('randomCountDiv');
-                const generateCFIPBtn = document.getElementById('generateCFIPBtn');
-                const fetchIPBtn = document.getElementById('fetchIPBtn');
-                
-                const CF_CIDR_LIST = [
-                    '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
-                    '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
-                    '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
-                    '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22'
-                ];
-                
-                function generateRandomIPFromCIDR(cidr) {
-                    const [baseIP, prefixLength] = cidr.split('/');
-                    const prefix = parseInt(prefixLength);
-                    const hostBits = 32 - prefix;
-                    const ipParts = baseIP.split('.').map(p => parseInt(p));
-                    const ipInt = (ipParts[0] << 24) | (ipParts[1] << 16) | (ipParts[2] << 8) | ipParts[3];
-                    const randomOffset = Math.floor(Math.random() * Math.pow(2, hostBits));
-                    const mask = (0xFFFFFFFF << hostBits) >>> 0;
-                    const randomIP = (((ipInt & mask) >>> 0) + randomOffset) >>> 0;
-                    return [(randomIP >>> 24) & 0xFF, (randomIP >>> 16) & 0xFF, (randomIP >>> 8) & 0xFF, randomIP & 0xFF].join('.');
-                }
-                
-                function generateCFRandomIPs(count, port) {
-                    const ips = [];
-                    for (let i = 0; i < count; i++) {
-                        const cidr = CF_CIDR_LIST[Math.floor(Math.random() * CF_CIDR_LIST.length)];
-                        const ip = generateRandomIPFromCIDR(cidr);
-                        ips.push(ip + ':' + port);
-                    }
-                    return ips;
-                }
-                
-                if (ipSourceSelect) {
-                    ipSourceSelect.addEventListener('change', function() {
-                        const value = this.value;
-                        manualInputDiv.style.display = value === 'manual' ? 'block' : 'none';
-                        urlFetchDiv.style.display = value === 'urlFetch' ? 'block' : 'none';
-                        cfRandomDiv.style.display = value === 'cfRandom' ? 'block' : 'none';
-                        randomCountDiv.style.display = value === 'cfRandom' ? 'block' : 'none';
+                const openLatencyTestBtn = document.getElementById('openLatencyTestBtn');
+                if (openLatencyTestBtn) {
+                    openLatencyTestBtn.addEventListener('click', function() {
+                        const currentPath = window.location.pathname.replace(/\\/$/, '');
+                        const testUrl = window.location.protocol + '//' + window.location.host + currentPath + '/latency-test';
+                        const httpTestUrl = testUrl.replace('https://', 'http://');
+                        window.open(httpTestUrl, 'latencyTest', 'width=850,height=700,scrollbars=yes,resizable=yes');
                     });
                 }
                 
-                if (generateCFIPBtn) {
-                    generateCFIPBtn.addEventListener('click', function() {
-                        const count = parseInt(document.getElementById('randomIPCount').value) || 20;
-                        const port = document.getElementById('latencyTestPort').value || '443';
-                        const ips = generateCFRandomIPs(count, port);
-                        document.getElementById('latencyTestInput').value = ips.join(',');
-                        manualInputDiv.style.display = 'block';
-                        showStatus('${isFarsi ? 'تولید شد' : '已生成'} ' + count + ' ${isFarsi ? 'IP تصادفی CF' : '个CF随机IP'}', 'success');
-                    });
-                }
-                
-                if (fetchIPBtn) {
-                    fetchIPBtn.addEventListener('click', async function() {
-                        const urlInput = document.getElementById('fetchURLInput');
-                        const fetchUrl = urlInput.value.trim();
-                        if (!fetchUrl) {
-                            alert('${isFarsi ? 'لطفا URL را وارد کنید' : '请输入URL'}');
-                            return;
-                        }
-                        
-                        fetchIPBtn.disabled = true;
-                        fetchIPBtn.textContent = '${isFarsi ? 'در حال دریافت...' : '获取中...'}';
-                        
-                        try {
-                            const response = await fetch(fetchUrl);
-                            if (!response.ok) throw new Error('HTTP ' + response.status);
-                            const text = await response.text();
-                            const lines = text.trim().split('\\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
-                            
-                            if (lines.length > 0) {
-                                document.getElementById('latencyTestInput').value = lines.join(',');
-                                manualInputDiv.style.display = 'block';
-                                showStatus('${isFarsi ? 'دریافت شد' : '已获取'} ' + lines.length + ' ${isFarsi ? 'IP' : '个IP'}', 'success');
-                            } else {
-                                showStatus('${isFarsi ? 'داده‌ای یافت نشد' : '未获取到数据'}', 'error');
-                            }
-                        } catch (err) {
-                            showStatus('${isFarsi ? 'خطا در دریافت' : '获取失败'}: ' + err.message, 'error');
-                        } finally {
-                            fetchIPBtn.disabled = false;
-                            fetchIPBtn.textContent = '⬇ ${isFarsi ? 'دریافت IP' : '获取IP'}';
-                        }
-                    });
-                }
-                
-                if (startTestBtn) {
-                    startTestBtn.addEventListener('click', async function() {
-                        const inputField = document.getElementById('latencyTestInput');
-                        const portField = document.getElementById('latencyTestPort');
-                        const inputValue = inputField.value.trim();
-                        const defaultPort = portField.value || '443';
-                        
-                        if (!inputValue) {
-                            alert('${isFarsi ? 'لطفا IP یا دامنه وارد کنید' : '请输入IP或域名'}');
-                            return;
-                        }
-                        
-                        const targets = inputValue.split(',').map(t => t.trim()).filter(t => t);
-                        if (targets.length === 0) return;
-                        
-                        startTestBtn.style.display = 'none';
-                        stopTestBtn.style.display = 'inline-block';
-                        testStatus.style.display = 'block';
-                        testResultsDiv.style.display = 'block';
-                        resultsList.innerHTML = '';
-                        testResults = [];
-                        
-                        testAbortController = new AbortController();
-                        
-                        let completed = 0;
-                        const total = targets.length;
-                        
-                        for (const target of targets) {
-                            if (testAbortController.signal.aborted) break;
-                            
-                            testStatus.textContent = '${isFarsi ? 'در حال تست' : '测试中'}: ' + (completed + 1) + '/' + total + ' - ' + target;
-                            
-                            let host = target;
-                            let port = defaultPort;
-                            let nodeName = '';
-                            
-                            if (target.includes('#')) {
-                                const parts = target.split('#');
-                                nodeName = parts[1] || '';
-                                host = parts[0];
-                            }
-                            
-                            if (host.includes(':') && !host.startsWith('[')) {
-                                const lastColon = host.lastIndexOf(':');
-                                const possiblePort = host.substring(lastColon + 1);
-                                if (/^[0-9]+$/.test(possiblePort)) {
-                                    port = possiblePort;
-                                    host = host.substring(0, lastColon);
-                                }
-                            } else if (host.includes(']:')) {
-                                const parts = host.split(']:');
-                                host = parts[0] + ']';
-                                port = parts[1];
-                            }
-                            
-                            const result = await testLatency(host, port, testAbortController.signal);
-                            result.host = host;
-                            result.port = port;
-                            if (result.success && result.colo) {
-                                result.nodeName = nodeName || ('CF-' + result.colo);
-                            } else {
-                                result.nodeName = nodeName || host;
-                            }
-                            testResults.push(result);
-                            
-                            const resultItem = document.createElement('div');
-                            resultItem.style.cssText = 'display: flex; align-items: center; padding: 8px; border-bottom: 1px solid #003300; gap: 10px;';
-                            
-                            const checkbox = document.createElement('input');
-                            checkbox.type = 'checkbox';
-                            checkbox.checked = result.success;
-                            checkbox.disabled = !result.success;
-                            checkbox.dataset.index = testResults.length - 1;
-                            checkbox.style.cssText = 'width: 18px; height: 18px; cursor: pointer;';
-                            
-                            const info = document.createElement('div');
-                            info.style.cssText = 'flex: 1; font-family: monospace; font-size: 13px;';
-                            
-                            if (result.success) {
-                                const coloDisplay = result.colo ? ' <span style="color: #00aaff;">[' + result.colo + ']</span>' : '';
-                                info.innerHTML = '<span style="color: #00ff00;">' + host + ':' + port + '</span>' + coloDisplay + ' <span style="color: #ffff00;">' + result.latency + 'ms</span>';
-                            } else {
-                                const errorDetail = result.error || '${isFarsi ? 'زمان تمام شد' : '超时'}';
-                                const testUrlDisplay = result.testUrl ? '<br><span style="color: #888; font-size: 11px;">URL: ' + result.testUrl + '</span>' : '';
-                                info.innerHTML = '<span style="color: #ff4444;">' + host + ':' + port + '</span> <span style="color: #ff6666; font-size: 12px;">' + errorDetail + '</span>' + testUrlDisplay;
-                            }
-                            
-                            resultItem.appendChild(checkbox);
-                            resultItem.appendChild(info);
-                            resultsList.appendChild(resultItem);
-                            
-                            completed++;
-                        }
-                        
-                        testStatus.textContent = '${isFarsi ? 'تست کامل شد' : '测试完成'}: ' + completed + '/' + total;
-                        startTestBtn.style.display = 'inline-block';
-                        stopTestBtn.style.display = 'none';
-                    });
-                }
-                
-                if (stopTestBtn) {
-                    stopTestBtn.addEventListener('click', function() {
-                        if (testAbortController) {
-                            testAbortController.abort();
-                        }
-                        startTestBtn.style.display = 'inline-block';
-                        stopTestBtn.style.display = 'none';
-                        testStatus.textContent = '${isFarsi ? 'تست متوقف شد' : '测试已停止'}';
-                    });
-                }
-                
-                if (selectAllBtn) {
-                    selectAllBtn.addEventListener('click', function() {
-                        const checkboxes = resultsList.querySelectorAll('input[type="checkbox"]:not(:disabled)');
-                        checkboxes.forEach(cb => cb.checked = true);
-                    });
-                }
-                
-                if (deselectAllBtn) {
-                    deselectAllBtn.addEventListener('click', function() {
-                        const checkboxes = resultsList.querySelectorAll('input[type="checkbox"]');
-                        checkboxes.forEach(cb => cb.checked = false);
-                    });
-                }
-                
-                if (addSelectedBtn) {
-                    addSelectedBtn.addEventListener('click', function() {
-                        const checkboxes = resultsList.querySelectorAll('input[type="checkbox"]:checked');
-                        if (checkboxes.length === 0) {
-                            alert('${isFarsi ? 'لطفا حداقل یک مورد انتخاب کنید' : '请至少选择一项'}');
-                            return;
-                        }
-                        
-                        const selectedItems = [];
-                        checkboxes.forEach(cb => {
-                            const idx = parseInt(cb.dataset.index);
-                            const result = testResults[idx];
-                            if (result && result.success) {
-                                const nameWithLatency = result.colo ? (result.colo + '-' + result.latency + 'ms') : (result.nodeName + '-' + result.latency + 'ms');
-                                const itemStr = result.host + ':' + result.port + '#' + nameWithLatency;
-                                selectedItems.push(itemStr);
-                            }
-                        });
-                        
-                        if (selectedItems.length > 0) {
-                            const preferredIPsInput = document.getElementById('preferredIPs');
-                            const currentValue = preferredIPsInput.value.trim();
-                            const newValue = currentValue ? currentValue + ',' + selectedItems.join(',') : selectedItems.join(',');
-                            preferredIPsInput.value = newValue;
-                            showStatus('${isFarsi ? 'موفقیت‌آمیز بود' : '已添加'} ' + selectedItems.length + ' ${isFarsi ? 'مورد به لیست ترجیحی' : '项到优选列表'}', 'success');
-                        }
-                    });
-                }
-                
-                function ipToHex(ip) {
-                    const parts = ip.split('.');
-                    if (parts.length !== 4) return null;
-                    let hex = '';
-                    for (let i = 0; i < 4; i++) {
-                        const num = parseInt(parts[i]);
-                        if (isNaN(num) || num < 0 || num > 255) return null;
-                        hex += num.toString(16).padStart(2, '0');
-                    }
-                    return hex;
-                }
-                
-                async function testLatency(host, port, signal) {
-                    const timeout = 8000;
-                    let colo = '';
-                    let testUrl = '';
-                    
-                    try {
-                        const controller = new AbortController();
-                        const timeoutId = setTimeout(() => controller.abort(), timeout);
-                        
-                        if (signal) {
-                            signal.addEventListener('abort', () => controller.abort());
-                        }
-                        
-                        const cleanHost = host.replace(/^\\[|\\]$/g, '');
-                        const hexIP = ipToHex(cleanHost);
-                        const testDomain = hexIP ? (hexIP + '.nip.lfree.org') : (cleanHost + '.nip.lfree.org');
-                        testUrl = 'https://' + testDomain + ':' + port + '/';
-                        
-                        console.log('[LatencyTest] Testing:', testUrl, 'Original:', host + ':' + port, 'HexIP:', hexIP);
-                        
-                        const firstStart = Date.now();
-                        const response1 = await fetch(testUrl, { 
-                            signal: controller.signal
-                        });
-                        const firstTime = Date.now() - firstStart;
-                        
-                        if (!response1.ok) {
-                            clearTimeout(timeoutId);
-                            return { success: false, latency: firstTime, error: 'HTTP ' + response1.status + ' ' + response1.statusText, colo: '', testUrl: testUrl };
-                        }
-                        
-                        try {
-                            const text = await response1.text();
-                            console.log('[LatencyTest] Response body:', text.substring(0, 200));
-                            const data = JSON.parse(text);
-                            if (data.colo) {
-                                colo = data.colo;
-                            }
-                        } catch (e) {
-                            console.log('[LatencyTest] Parse error:', e.message);
-                        }
-                        
-                        const secondStart = Date.now();
-                        const response2 = await fetch(testUrl, { 
-                            signal: controller.signal
-                        });
-                        await response2.text();
-                        const latency = Date.now() - secondStart;
-                        
-                        clearTimeout(timeoutId);
-                        
-                        console.log('[LatencyTest] First:', firstTime + 'ms (DNS+TLS+RTT)', 'Second:', latency + 'ms (RTT only)');
-                        
-                        return { success: true, latency: latency, colo: colo, testUrl: testUrl };
-                    } catch (error) {
-                        const errorMsg = error.name === 'AbortError' ? '${isFarsi ? 'زمان تمام شد' : '超时'}' : error.message;
-                        console.log('[LatencyTest] Error:', errorMsg, 'URL:', testUrl);
-                        return { success: false, latency: -1, error: errorMsg, colo: '', testUrl: testUrl };
-                    }
-                }
             });
         </script>
     </body>
@@ -4010,6 +3651,443 @@
         return new Response(pageHtml, { 
             status: 200, 
             headers: { 'Content-Type': 'text/html; charset=utf-8' } 
+        });
+    }
+
+    async function handleLatencyTestPage(request) {
+        const url = new URL(request.url);
+        const acceptLanguage = request.headers.get('Accept-Language') || '';
+        const browserLang = acceptLanguage.split(',')[0].split('-')[0].toLowerCase();
+        const isFarsi = browserLang === 'fa' || acceptLanguage.includes('fa-IR');
+        
+        const t = {
+            title: isFarsi ? 'تست تأخیر' : '延迟测试',
+            ipSource: isFarsi ? 'منبع IP' : 'IP来源',
+            manualInput: isFarsi ? 'ورودی دستی' : '手动输入',
+            cfRandomIP: isFarsi ? 'IP تصادفی CF' : 'CF随机IP',
+            urlFetch: isFarsi ? 'دریافت از URL' : 'URL获取',
+            port: isFarsi ? 'پورت' : '端口',
+            threads: isFarsi ? 'رشته‌ها' : '线程',
+            randomCount: isFarsi ? 'تعداد' : '数量',
+            ipInput: isFarsi ? 'IP یا دامنه' : 'IP或域名',
+            ipPlaceholder: isFarsi ? 'مثال: 1.1.1.1,8.8.8.8' : '例如: 1.1.1.1,8.8.8.8',
+            fetchURL: isFarsi ? 'URL منبع' : '来源URL',
+            fetchURLPlaceholder: isFarsi ? 'URL لیست IP را وارد کنید' : '输入IP列表URL',
+            fetchIP: isFarsi ? 'دریافت IP' : '获取IP',
+            generateIP: isFarsi ? 'تولید IP تصادفی' : '生成随机IP',
+            startTest: isFarsi ? 'شروع تست' : '开始测试',
+            stopTest: isFarsi ? 'توقف' : '停止',
+            testResult: isFarsi ? 'نتایج تست' : '测试结果',
+            selectAll: isFarsi ? 'انتخاب همه' : '全选',
+            deselectAll: isFarsi ? 'لغو انتخاب' : '取消全选',
+            addAndClose: isFarsi ? 'افزودن و بستن' : '添加并关闭',
+            noParentWindow: isFarsi ? 'پنجره والد یافت نشد' : '未找到父窗口',
+            selectAtLeastOne: isFarsi ? 'لطفا حداقل یک مورد انتخاب کنید' : '请至少选择一项',
+            testing: isFarsi ? 'در حال تست' : '测试中',
+            testComplete: isFarsi ? 'تست کامل شد' : '测试完成',
+            timeout: isFarsi ? 'زمان تمام شد' : '超时',
+            enterIP: isFarsi ? 'لطفا IP یا دامنه وارد کنید' : '请输入IP或域名',
+            enterURL: isFarsi ? 'لطفا URL را وارد کنید' : '请输入URL',
+            fetching: isFarsi ? 'در حال دریافت...' : '获取中...',
+            fetched: isFarsi ? 'دریافت شد' : '已获取',
+            noData: isFarsi ? 'داده‌ای یافت نشد' : '未获取到数据',
+            fetchError: isFarsi ? 'خطا در دریافت' : '获取失败',
+            generated: isFarsi ? 'تولید شد' : '已生成'
+        };
+        
+        const coloMapStr = \`{
+            'SJC': '圣何塞', 'LAX': '洛杉矶', 'SEA': '西雅图', 'SFO': '旧金山', 'DFW': '达拉斯',
+            'ORD': '芝加哥', 'IAD': '华盛顿', 'ATL': '亚特兰大', 'MIA': '迈阿密', 'DEN': '丹佛',
+            'PHX': '凤凰城', 'BOS': '波士顿', 'EWR': '纽瓦克', 'JFK': '纽约', 'LAS': '拉斯维加斯',
+            'HKG': '香港', 'TPE': '台北', 'NRT': '东京成田', 'HND': '东京羽田', 'KIX': '大阪',
+            'ICN': '首尔', 'SIN': '新加坡', 'BKK': '曼谷', 'KUL': '吉隆坡',
+            'LHR': '伦敦', 'CDG': '巴黎', 'FRA': '法兰克福', 'AMS': '阿姆斯特丹',
+            'SYD': '悉尼', 'MEL': '墨尔本', 'NAN': '楠迪', 'AKL': '奥克兰',
+            'GRU': '圣保罗', 'EZE': '布宜诺斯艾利斯', 'SCL': '圣地亚哥', 'BOG': '波哥大',
+            'MEX': '墨西哥城', 'YYZ': '多伦多', 'YVR': '温哥华',
+            'JNB': '约翰内斯堡', 'DXB': '迪拜', 'DOH': '多哈'
+        }\`;
+        
+        const pageHtml = \`<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>\${t.title}</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            font-family: 'Courier New', monospace; 
+            background: #000; 
+            color: #00ff00; 
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { text-align: center; margin-bottom: 20px; text-shadow: 0 0 10px #00ff00; }
+        .row { display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; align-items: flex-end; }
+        .field { flex: 1; min-width: 100px; }
+        .field label { display: block; margin-bottom: 5px; font-size: 0.9rem; }
+        .field input, .field select { 
+            width: 100%; padding: 10px; 
+            background: rgba(0,0,0,0.8); border: 1px solid #00ff00; 
+            color: #00ff00; font-family: inherit; font-size: 13px;
+        }
+        .field.wide { flex: 3; min-width: 200px; }
+        button { 
+            padding: 10px 20px; 
+            background: rgba(0,255,0,0.2); border: 1px solid #00ff00; 
+            color: #00ff00; font-family: inherit; cursor: pointer; 
+            transition: all 0.3s;
+        }
+        button:hover { background: rgba(0,255,0,0.4); }
+        button.stop { background: rgba(255,0,0,0.2); border-color: #ff4444; color: #ff4444; }
+        button.primary { background: rgba(0,255,0,0.3); font-weight: bold; width: 100%; margin-top: 15px; padding: 15px; }
+        #status { margin: 15px 0; font-size: 0.9rem; }
+        #results { 
+            max-height: 400px; overflow-y: auto; 
+            background: rgba(0,0,0,0.5); border: 1px solid #004400; 
+            border-radius: 4px; padding: 10px; margin-top: 15px;
+        }
+        .result-item { 
+            display: flex; align-items: center; gap: 10px; 
+            padding: 8px; border-bottom: 1px solid #003300;
+        }
+        .result-item input { width: 18px; height: 18px; }
+        .result-info { flex: 1; font-size: 13px; }
+        .success { color: #00ff00; }
+        .fail { color: #ff4444; }
+        .colo { color: #00aaff; }
+        .latency { color: #ffff00; }
+        .toolbar { display: flex; justify-content: space-between; margin-bottom: 10px; }
+        .toolbar button { padding: 5px 10px; font-size: 0.8rem; background: transparent; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚡ \${t.title}</h1>
+        
+        <div class="row">
+            <div class="field">
+                <label>\${t.ipSource}</label>
+                <select id="ipSource">
+                    <option value="manual">\${t.manualInput}</option>
+                    <option value="cfRandom">\${t.cfRandomIP}</option>
+                    <option value="urlFetch">\${t.urlFetch}</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>\${t.port}</label>
+                <input type="number" id="port" value="80" min="1" max="65535">
+            </div>
+            <div class="field">
+                <label>\${t.threads}</label>
+                <input type="number" id="threads" value="5" min="1" max="50">
+            </div>
+            <div class="field hidden" id="countField">
+                <label>\${t.randomCount}</label>
+                <input type="number" id="count" value="20" min="1" max="100">
+            </div>
+        </div>
+        
+        <div id="manualDiv">
+            <div class="row">
+                <div class="field wide">
+                    <label>\${t.ipInput}</label>
+                    <input type="text" id="ipInput" placeholder="\${t.ipPlaceholder}">
+                </div>
+            </div>
+        </div>
+        
+        <div id="urlDiv" class="hidden">
+            <div class="row">
+                <div class="field wide">
+                    <label>\${t.fetchURL}</label>
+                    <input type="text" id="urlInput" placeholder="\${t.fetchURLPlaceholder}">
+                </div>
+                <button id="fetchBtn">⬇ \${t.fetchIP}</button>
+            </div>
+        </div>
+        
+        <div id="cfDiv" class="hidden">
+            <button id="generateBtn" style="width:100%">🎲 \${t.generateIP}</button>
+        </div>
+        
+        <div class="row" style="margin-top:15px">
+            <button id="startBtn">▶ \${t.startTest}</button>
+            <button id="stopBtn" class="stop hidden">⏹ \${t.stopTest}</button>
+        </div>
+        
+        <div id="status"></div>
+        
+        <div id="resultsContainer" class="hidden">
+            <div class="toolbar">
+                <span style="font-weight:bold">\${t.testResult}</span>
+                <div>
+                    <button id="selectAllBtn">\${t.selectAll}</button>
+                    <button id="deselectAllBtn">\${t.deselectAll}</button>
+                </div>
+            </div>
+            <div id="results"></div>
+            <button id="addBtn" class="primary">✓ \${t.addAndClose}</button>
+        </div>
+    </div>
+    
+    <script>
+        const coloMap = \${coloMapStr};
+        function getColoName(c) { return coloMap[c] || c; }
+        
+        const CF_CIDR = ['173.245.48.0/20','103.21.244.0/22','103.22.200.0/22','103.31.4.0/22','141.101.64.0/18','108.162.192.0/18','190.93.240.0/20','188.114.96.0/20','197.234.240.0/22','198.41.128.0/17','162.158.0.0/15','104.16.0.0/13','104.24.0.0/14','172.64.0.0/13','131.0.72.0/22'];
+        
+        function genIP(cidr) {
+            const [base, prefix] = cidr.split('/');
+            const hostBits = 32 - parseInt(prefix);
+            const parts = base.split('.').map(Number);
+            const ipInt = (parts[0]<<24)|(parts[1]<<16)|(parts[2]<<8)|parts[3];
+            const rand = Math.floor(Math.random() * Math.pow(2, hostBits));
+            const mask = (0xFFFFFFFF << hostBits) >>> 0;
+            const newIP = (((ipInt & mask) >>> 0) + rand) >>> 0;
+            return [(newIP>>>24)&0xFF,(newIP>>>16)&0xFF,(newIP>>>8)&0xFF,newIP&0xFF].join('.');
+        }
+        
+        function genCFIPs(n) {
+            const ips = [];
+            for (let i = 0; i < n; i++) {
+                ips.push(genIP(CF_CIDR[Math.floor(Math.random() * CF_CIDR.length)]));
+            }
+            return ips;
+        }
+        
+        let abortCtrl = null;
+        let testResults = [];
+        
+        const ipSource = document.getElementById('ipSource');
+        const manualDiv = document.getElementById('manualDiv');
+        const urlDiv = document.getElementById('urlDiv');
+        const cfDiv = document.getElementById('cfDiv');
+        const countField = document.getElementById('countField');
+        const ipInput = document.getElementById('ipInput');
+        const urlInput = document.getElementById('urlInput');
+        const portInput = document.getElementById('port');
+        const threadsInput = document.getElementById('threads');
+        const countInput = document.getElementById('count');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const status = document.getElementById('status');
+        const resultsContainer = document.getElementById('resultsContainer');
+        const results = document.getElementById('results');
+        
+        ['ipInput','urlInput','port','threads','count','ipSource'].forEach(id => {
+            const el = document.getElementById(id);
+            const saved = localStorage.getItem('lt_' + id);
+            if (saved) el.value = saved;
+            el.addEventListener('input', () => localStorage.setItem('lt_' + id, el.value));
+            if (el.tagName === 'SELECT') el.addEventListener('change', () => localStorage.setItem('lt_' + id, el.value));
+        });
+        
+        function updateUI() {
+            const v = ipSource.value;
+            manualDiv.classList.toggle('hidden', v !== 'manual');
+            urlDiv.classList.toggle('hidden', v !== 'urlFetch');
+            cfDiv.classList.toggle('hidden', v !== 'cfRandom');
+            countField.classList.toggle('hidden', v !== 'cfRandom');
+        }
+        ipSource.addEventListener('change', updateUI);
+        updateUI();
+        
+        document.getElementById('fetchBtn').addEventListener('click', async () => {
+            const url = urlInput.value.trim();
+            if (!url) { alert('\${t.enterURL}'); return; }
+            const btn = document.getElementById('fetchBtn');
+            btn.disabled = true; btn.textContent = '\${t.fetching}';
+            try {
+                const res = await fetch(url);
+                const text = await res.text();
+                const lines = text.trim().split('\\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'));
+                if (lines.length) {
+                    ipInput.value = lines.join(',');
+                    localStorage.setItem('lt_ipInput', ipInput.value);
+                    manualDiv.classList.remove('hidden');
+                    status.textContent = '\${t.fetched} ' + lines.length + ' IP';
+                } else {
+                    status.textContent = '\${t.noData}';
+                }
+            } catch(e) {
+                status.textContent = '\${t.fetchError}: ' + e.message;
+            }
+            btn.disabled = false; btn.textContent = '⬇ \${t.fetchIP}';
+        });
+        
+        document.getElementById('generateBtn').addEventListener('click', () => {
+            const n = parseInt(countInput.value) || 20;
+            const ips = genCFIPs(n);
+            ipInput.value = ips.join(',');
+            localStorage.setItem('lt_ipInput', ipInput.value);
+            manualDiv.classList.remove('hidden');
+            status.textContent = '\${t.generated} ' + n + ' IP';
+        });
+        
+        async function testLatency(host, port, signal) {
+            const timeout = 8000;
+            let colo = '', testUrl = '';
+            try {
+                const ctrl = new AbortController();
+                const tid = setTimeout(() => ctrl.abort(), timeout);
+                if (signal) signal.addEventListener('abort', () => ctrl.abort());
+                
+                const clean = host.replace(/^\\[|\\]\$/g, '');
+                const isV6 = clean.includes(':');
+                const hostPart = isV6 ? ('[' + clean + ']') : clean;
+                testUrl = 'http://' + hostPart + ':80/cdn-cgi/trace';
+                
+                const t1 = Date.now();
+                const r1 = await fetch(testUrl, { signal: ctrl.signal });
+                const firstTime = Date.now() - t1;
+                
+                if (!r1.ok) {
+                    clearTimeout(tid);
+                    return { success: false, latency: firstTime, error: 'HTTP ' + r1.status, colo: '', testUrl };
+                }
+                
+                const text = await r1.text();
+                const m = text.match(/colo=([A-Z]+)/);
+                if (m) colo = m[1];
+                
+                const t2 = Date.now();
+                const r2 = await fetch(testUrl, { signal: ctrl.signal });
+                await r2.text();
+                const latency = Date.now() - t2;
+                
+                clearTimeout(tid);
+                return { success: true, latency, colo, testUrl };
+            } catch(e) {
+                return { success: false, latency: -1, error: e.name === 'AbortError' ? '\${t.timeout}' : e.message, colo: '', testUrl };
+            }
+        }
+        
+        startBtn.addEventListener('click', async () => {
+            const input = ipInput.value.trim();
+            const port = portInput.value || '80';
+            const threads = parseInt(threadsInput.value) || 5;
+            
+            if (!input) { alert('\${t.enterIP}'); return; }
+            
+            const targets = input.split(',').map(t=>t.trim()).filter(t=>t);
+            if (!targets.length) return;
+            
+            startBtn.classList.add('hidden');
+            stopBtn.classList.remove('hidden');
+            resultsContainer.classList.remove('hidden');
+            results.innerHTML = '';
+            testResults = [];
+            abortCtrl = new AbortController();
+            
+            let done = 0;
+            const total = targets.length;
+            
+            function parseTarget(t) {
+                let host = t, p = port, name = '';
+                if (t.includes('#')) { const ps = t.split('#'); name = ps[1]||''; host = ps[0]; }
+                if (host.includes(':') && !host.startsWith('[')) {
+                    const lc = host.lastIndexOf(':');
+                    const pp = host.substring(lc+1);
+                    if (/^[0-9]+\$/.test(pp)) { p = pp; host = host.substring(0, lc); }
+                } else if (host.includes(']:')) {
+                    const ps = host.split(']:'); host = ps[0]+']'; p = ps[1];
+                }
+                return { host, port: p, nodeName: name };
+            }
+            
+            function render(r, idx) {
+                const div = document.createElement('div');
+                div.className = 'result-item';
+                const cb = document.createElement('input');
+                cb.type = 'checkbox'; cb.checked = r.success; cb.disabled = !r.success; cb.dataset.idx = idx;
+                const info = document.createElement('div');
+                info.className = 'result-info';
+                if (r.success) {
+                    const cn = r.colo ? getColoName(r.colo) : '';
+                    const coloHtml = cn ? ' <span class="colo">['+cn+']</span>' : '';
+                    info.innerHTML = '<span class="success">'+r.host+':'+r.port+'</span>'+coloHtml+' <span class="latency">'+r.latency+'ms</span>';
+                } else {
+                    info.innerHTML = '<span class="fail">'+r.host+':'+r.port+'</span> <span class="fail">'+r.error+'</span>';
+                }
+                div.appendChild(cb); div.appendChild(info);
+                results.appendChild(div);
+            }
+            
+            async function testOne(t) {
+                if (abortCtrl.signal.aborted) return null;
+                const { host, port: p, nodeName } = parseTarget(t);
+                const r = await testLatency(host, p, abortCtrl.signal);
+                r.host = host; r.port = p;
+                r.nodeName = (r.success && r.colo) ? (nodeName || getColoName(r.colo)) : (nodeName || host);
+                return r;
+            }
+            
+            for (let i = 0; i < total; i += threads) {
+                if (abortCtrl.signal.aborted) break;
+                const batch = targets.slice(i, Math.min(i+threads, total));
+                status.textContent = '\${t.testing}: '+(i+1)+'-'+Math.min(i+threads,total)+'/'+total+' (\${t.threads}: '+threads+')';
+                const rs = await Promise.all(batch.map(testOne));
+                for (const r of rs) {
+                    if (r) { testResults.push(r); render(r, testResults.length-1); done++; }
+                }
+            }
+            
+            status.textContent = '\${t.testComplete}: '+done+'/'+total;
+            startBtn.classList.remove('hidden');
+            stopBtn.classList.add('hidden');
+        });
+        
+        stopBtn.addEventListener('click', () => {
+            if (abortCtrl) abortCtrl.abort();
+            startBtn.classList.remove('hidden');
+            stopBtn.classList.add('hidden');
+        });
+        
+        document.getElementById('selectAllBtn').addEventListener('click', () => {
+            results.querySelectorAll('input[type=checkbox]:not(:disabled)').forEach(cb => cb.checked = true);
+        });
+        document.getElementById('deselectAllBtn').addEventListener('click', () => {
+            results.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
+        });
+        
+        document.getElementById('addBtn').addEventListener('click', () => {
+            const cbs = results.querySelectorAll('input[type=checkbox]:checked');
+            if (!cbs.length) { alert('\${t.selectAtLeastOne}'); return; }
+            
+            const items = [];
+            cbs.forEach(cb => {
+                const r = testResults[parseInt(cb.dataset.idx)];
+                if (r && r.success) {
+                    items.push(r.host + ':' + r.port + '#' + r.nodeName);
+                }
+            });
+            
+            if (window.opener && !window.opener.closed) {
+                try {
+                    const yxInput = window.opener.document.getElementById('yx');
+                    if (yxInput) {
+                        yxInput.value = items.join(',');
+                        window.opener.focus();
+                        window.close();
+                    }
+                } catch(e) {
+                    alert('\${t.noParentWindow}');
+                }
+            } else {
+                alert('\${t.noParentWindow}');
+            }
+        });
+    </script>
+</body>
+</html>\`;
+        
+        return new Response(pageHtml, {
+            status: 200,
+            headers: { 'Content-Type': 'text/html; charset=utf-8' }
         });
     }
 
@@ -4848,7 +4926,6 @@
                         { domain: 'ProxyIP.US.CMLiussss.net', region: 'US', regionCode: 'US', port: 443 },
                         { domain: 'ProxyIP.SG.CMLiussss.net', region: 'SG', regionCode: 'SG', port: 443 },
                         { domain: 'ProxyIP.JP.CMLiussss.net', region: 'JP', regionCode: 'JP', port: 443 },
-                        { domain: 'ProxyIP.HK.CMLiussss.net', region: 'HK', regionCode: 'HK', port: 443 },
                         { domain: 'ProxyIP.KR.CMLiussss.net', region: 'KR', regionCode: 'KR', port: 443 },
                         { domain: 'ProxyIP.DE.CMLiussss.net', region: 'DE', regionCode: 'DE', port: 443 },
                         { domain: 'ProxyIP.SE.CMLiussss.net', region: 'SE', regionCode: 'SE', port: 443 },
