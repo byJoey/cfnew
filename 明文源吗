@@ -1,6 +1,6 @@
     import { connect } from 'cloudflare:sockets';
 
-    let at = '351c9981-04b6-4103-aa4b-864aa9c91469';
+    let at = '92c6e943-c9e5-4630-9ae3-a5d07474eaa5';
     let fallbackAddress = '';
     let fallbackPort = '443';
     let socks5Config = '';
