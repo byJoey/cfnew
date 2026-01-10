@@ -1979,7 +1979,7 @@
                     preferredControlYes: '关闭优选',
                     preferredControlHint: '设置为"关闭优选"时只使用原生地址，不生成优选IP和域名节点',
                     regionNames: {
-                        US: '🇺🇸 美国', SG: '🇸🇬 新加坡', JP: '🇯🇵 日本',
+                        US: '🇺🇸 美国', SG: '🇸🇬 新加坡', JP: '🇯🇵 日本', HK: 'HK 香港',
                         KR: '🇰🇷 韩国', DE: '🇩🇪 德国', SE: '🇸🇪 瑞典', NL: '🇳🇱 荷兰',
                         FI: '🇫🇮 芬兰', GB: '🇬🇧 英国'
                     },
@@ -2110,7 +2110,7 @@
                     preferredControlYes: 'بستن ترجیح',
                     preferredControlHint: 'وقتی "بستن ترجیح" تنظیم شود، فقط از آدرس اصلی استفاده می‌شود، گره‌های IP و دامنه ترجیحی تولید نمی‌شوند',
                     regionNames: {
-                        US: '🇺🇸 آمریکا', SG: '🇸🇬 سنگاپور', JP: '🇯🇵 ژاپن',
+                        US: '🇺🇸 آمریکا', SG: '🇸🇬 سنگاپور', JP: '🇯🇵 ژاپن', HK: '🇯🇵 ژاپن',
                         KR: '🇰🇷 کره جنوبی', DE: '🇩🇪 آلمان', SE: '🇸🇪 سوئد', NL: '🇳🇱 هلند',
                         FI: '🇫🇮 فنلاند', GB: '🇬🇧 بریتانیا'
                     },
@@ -2410,6 +2410,7 @@
                                     <option value="US">${t.regionNames.US}</option>
                                     <option value="SG">${t.regionNames.SG}</option>
                                     <option value="JP">${t.regionNames.JP}</option>
+                                    <option value="JP">${t.regionNames.HK}</option>
                                     <option value="KR">${t.regionNames.KR}</option>
                                     <option value="DE">${t.regionNames.DE}</option>
                                     <option value="SE">${t.regionNames.SE}</option>
