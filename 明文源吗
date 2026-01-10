@@ -2410,6 +2410,7 @@
                                     <option value="US">${t.regionNames.US}</option>
                                     <option value="SG">${t.regionNames.SG}</option>
                                     <option value="JP">${t.regionNames.JP}</option>
+                                    <option value="HK">${t.regionNames.HK}</option>
                                     <option value="KR">${t.regionNames.KR}</option>
                                     <option value="DE">${t.regionNames.DE}</option>
                                     <option value="SE">${t.regionNames.SE}</option>
