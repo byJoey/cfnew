@@ -35,6 +35,7 @@
         'US': ['🇺🇸 美国', 'US', 'United States'],
         'SG': ['🇸🇬 新加坡', 'SG', 'Singapore'],
         'JP': ['🇯🇵 日本', 'JP', 'Japan'],
+        'HK': ['🇭🇰 香港', 'HK', 'Hong Kong'],
         'KR': ['🇰🇷 韩国', 'KR', 'South Korea'],
         'DE': ['🇩🇪 德国', 'DE', 'Germany'],
         'SE': ['🇸🇪 瑞典', 'SE', 'Sweden'],
@@ -51,6 +52,7 @@
         { domain: 'ProxyIP.US.CMLiussss.net', region: 'US', regionCode: 'US', port: 443 },
         { domain: 'ProxyIP.SG.CMLiussss.net', region: 'SG', regionCode: 'SG', port: 443 },
         { domain: 'ProxyIP.JP.CMLiussss.net', region: 'JP', regionCode: 'JP', port: 443 },
+        { domain: 'ProxyIP.HK.CMLiussss.net', region: 'HK', regionCode: 'HK', port: 443 },
         { domain: 'ProxyIP.KR.CMLiussss.net', region: 'KR', regionCode: 'KR', port: 443 },
         { domain: 'ProxyIP.DE.CMLiussss.net', region: 'DE', regionCode: 'DE', port: 443 },
         { domain: 'ProxyIP.SE.CMLiussss.net', region: 'SE', regionCode: 'SE', port: 443 },
@@ -176,6 +178,7 @@
                 const countryToRegion = {
                     'US': 'US', 'SG': 'SG', 'JP': 'JP', 'KR': 'KR',
                     'DE': 'DE', 'SE': 'SE', 'NL': 'NL', 'FI': 'FI', 'GB': 'GB',
+                    'HK': 'HK', 'MO': 'HK',
                     'CN': 'SG', 'TW': 'JP', 'AU': 'SG', 'CA': 'US',
                     'FR': 'DE', 'IT': 'DE', 'ES': 'DE', 'CH': 'DE',
                     'AT': 'DE', 'BE': 'NL', 'DK': 'SE', 'NO': 'SE', 'IE': 'GB'
@@ -236,9 +239,10 @@
     function getNearbyRegions(region) {
         const nearbyMap = {
             'US': ['SG', 'JP', 'KR'], 
-            'SG': ['JP', 'KR', 'US'], 
-            'JP': ['SG', 'KR', 'US'], 
-            'KR': ['JP', 'SG', 'US'], 
+            'SG': ['HK', 'JP', 'KR', 'US'], 
+            'HK': ['SG', 'JP', 'KR', 'US'], 
+            'JP': ['HK', 'SG', 'KR', 'US'], 
+            'KR': ['HK', 'JP', 'SG', 'US'], 
             'DE': ['NL', 'GB', 'SE', 'FI'], 
             'SE': ['DE', 'NL', 'FI', 'GB'], 
             'NL': ['DE', 'GB', 'SE', 'FI'], 
@@ -251,7 +255,7 @@
 
     function getAllRegionsByPriority(region) {
         const nearbyRegions = getNearbyRegions(region);
-        const allRegions = ['US', 'SG', 'JP', 'KR', 'DE', 'SE', 'NL', 'FI', 'GB'];
+        const allRegions = ['US', 'SG', 'JP', 'HK', 'KR', 'DE', 'SE', 'NL', 'FI', 'GB'];
         
         return [region, ...nearbyRegions, ...allRegions.filter(r => r !== region && !nearbyRegions.includes(r))];
     }
@@ -1979,7 +1983,7 @@
                     preferredControlYes: '关闭优选',
                     preferredControlHint: '设置为"关闭优选"时只使用原生地址，不生成优选IP和域名节点',
                     regionNames: {
-                        US: '🇺🇸 美国', SG: '🇸🇬 新加坡', JP: '🇯🇵 日本',
+                        US: '🇺🇸 美国', SG: '🇸🇬 新加坡', HK: '🇭🇰 香港', JP: '🇯🇵 日本',
                         KR: '🇰🇷 韩国', DE: '🇩🇪 德国', SE: '🇸🇪 瑞典', NL: '🇳🇱 荷兰',
                         FI: '🇫🇮 芬兰', GB: '🇬🇧 英国'
                     },
@@ -2110,7 +2114,7 @@
                     preferredControlYes: 'بستن ترجیح',
                     preferredControlHint: 'وقتی "بستن ترجیح" تنظیم شود، فقط از آدرس اصلی استفاده می‌شود، گره‌های IP و دامنه ترجیحی تولید نمی‌شوند',
                     regionNames: {
-                        US: '🇺🇸 آمریکا', SG: '🇸🇬 سنگاپور', JP: '🇯🇵 ژاپن',
+                        US: '🇺🇸 آمریکا', SG: '🇸🇬 سنگاپور', HK: '🇭🇰 هنگ کنگ', JP: '🇯🇵 ژاپن',
                         KR: '🇰🇷 کره جنوبی', DE: '🇩🇪 آلمان', SE: '🇸🇪 سوئد', NL: '🇳🇱 هلند',
                         FI: '🇫🇮 فنلاند', GB: '🇬🇧 بریتانیا'
                     },
