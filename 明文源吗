@@ -19,7 +19,9 @@
     let ex = false;  
     let tp = '';
     // 启用ECH功能（true启用，false禁用）
-    let enableECH = false;  
+    let enableECH = false;
+    // 强制从DNS获取ECH（true强制DNS查询，false优先使用云端下发的ECH）
+    let echForceQuery = false;  
 
     let scu = 'https://url.v1.mk/sub';  
     // 远程配置URL（硬编码）
@@ -441,9 +443,14 @@
                     enableECH = echControl === 'yes' || echControl === true || echControl === 'true';
                 }
                 
-                // 如果启用了ECH，自动启用仅TLS模式（避免80端口干扰）
+                const echForceQueryControl = getConfigValue('echForceQuery', env.echForceQuery);
+                if (echForceQueryControl !== undefined && echForceQueryControl !== '') {
+                    echForceQuery = echForceQueryControl === 'yes' || echForceQueryControl === true || echForceQueryControl === 'true';
+                }
+                
+                // 如果启用了ECH或强制DNS查询，自动启用仅TLS模式（避免80端口干扰）
                 // ECH需要TLS才能工作，所以必须禁用非TLS节点
-                if (enableECH) {
+                if (enableECH || echForceQuery) {
                     disableNonTLS = true;
                 }
                 
@@ -1209,14 +1216,40 @@
     // 全局变量存储ECH调试信息
     let echDebugInfo = '';
     
-    async function fetchECHConfig(domain) {
-        if (!enableECH) {
+    async function fetchECHConfig(domain, env = null) {
+        // 如果两个都关闭，不获取ECH
+        if (!enableECH && !echForceQuery) {
             echDebugInfo = 'ECH功能已禁用';
             return null;
         }
         
         echDebugInfo = '';
         const debugSteps = [];
+        
+        // 如果开启了强制DNS查询，直接从DNS获取
+        if (echForceQuery) {
+            debugSteps.push('强制从DNS获取ECH配置...');
+        } else if (enableECH) {
+            // 如果只开启了ECH（云端模式），先尝试从环境变量/配置获取云端下发的ECH
+            // 从环境变量获取ECH配置（云端下发）
+            if (env && env.echConfig) {
+                const cloudEch = env.echConfig.trim();
+                if (cloudEch) {
+                    echDebugInfo = '✅ 使用云端下发的ECH配置';
+                    return cloudEch;
+                }
+            }
+            
+            // 从KV配置获取ECH配置
+            const kvEchConfig = getConfigValue('echConfig', '');
+            if (kvEchConfig && kvEchConfig.trim()) {
+                echDebugInfo = '✅ 使用KV配置中的ECH配置';
+                return kvEchConfig.trim();
+            }
+            
+            // 云端没有配置，从DNS获取作为备选
+            debugSteps.push('云端未下发ECH配置，从DNS获取...');
+        }
         
         try {
             // 优先使用 Google DNS 查询 cloudflare-ech.com 的 ECH 配置
@@ -1362,10 +1395,10 @@
         const workerDomain = url.hostname;
         const target = url.searchParams.get('target') || 'base64';
 
-        // 获取ECH配置（如果启用）
+        // 获取ECH配置（如果启用ECH或强制DNS查询）
         let echConfig = null;
-        if (enableECH) {
-            echConfig = await fetchECHConfig(workerDomain);
+        if (enableECH || echForceQuery) {
+            echConfig = await fetchECHConfig(workerDomain, env);
         }
 
         async function addNodesFromList(list) {
@@ -1595,8 +1628,8 @@
                         path: wsPath
                     });
                     
-                    // 如果启用了ECH且有ECH配置，添加ech参数（ECH需要伪装成Chrome浏览器）
-                    if (enableECH && echConfig) {
+                    // 如果启用了ECH或强制DNS查询且有ECH配置，添加ech参数（ECH需要伪装成Chrome浏览器）
+                    if ((enableECH || echForceQuery) && echConfig) {
                         wsParams.set('alpn', 'h3,h2,http/1.1');
                         wsParams.set('ech', echConfig);
                     }
@@ -1674,8 +1707,8 @@
                         path: wsPath
                     });
                     
-                    // 如果启用了ECH且有ECH配置，添加ech参数（ECH需要伪装成Chrome浏览器）
-                    if (enableECH && echConfig) {
+                    // 如果启用了ECH或强制DNS查询且有ECH配置，添加ech参数（ECH需要伪装成Chrome浏览器）
+                    if ((enableECH || echForceQuery) && echConfig) {
                         wsParams.set('alpn', 'h3,h2,http/1.1');
                         wsParams.set('ech', echConfig);
                     }
@@ -2152,7 +2185,9 @@
                     trojanPasswordHint: '设置自定义 Trojan 密码。留空则使用 UUID。客户端会自动对密码进行 SHA224 哈希。',
                     protocolHint: '可以同时启用多个协议。订阅将生成选中协议的节点。<br>• VLESS WS: 基于 WebSocket 的标准协议<br>• Trojan: 使用 SHA224 密码认证<br>• xhttp: 基于 HTTP POST 的伪装协议（需要绑定自定义域名并开启 gRPC）',
                     enableECH: '启用 ECH (Encrypted Client Hello)',
-                    enableECHHint: '启用后，每次刷新订阅时会自动从 DoH 获取最新的 ECH 配置并添加到链接中',
+                    enableECHHint: '使用云端下发的ECH配置（环境变量或KV配置中的echConfig）',
+                    enableECHForceQuery: '强制DNS查询',
+                    enableECHForceQueryHint: '强制从DNS获取ECH配置，忽略云端配置（二选一，不能同时开启）',
                     saveProtocol: '保存协议配置',
                     subscriptionConverterPlaceholder: '默认: https://url.v1.mk/sub',
                     subscriptionConverterHint: '自定义订阅转换API地址，留空则使用默认地址',
@@ -2230,7 +2265,9 @@
                     enableTrojan: 'فعال‌سازی پروتکل Trojan',
                     enableXhttp: 'فعال‌سازی پروتکل xhttp',
                     enableECH: 'فعال‌سازی ECH (Encrypted Client Hello)',
-                    enableECHHint: 'پس از فعال‌سازی، در هر بار تازه‌سازی اشتراک، پیکربندی ECH به‌روز به‌طور خودکار از DoH دریافت شده و به لینک‌ها اضافه می‌شود',
+                    enableECHHint: 'استفاده از پیکربندی ECH ارسال شده از ابر (متغیر محیطی یا پیکربندی KV)',
+                    enableECHForceQuery: 'اجبار به جستجوی DNS',
+                    enableECHForceQueryHint: 'اجبار به دریافت پیکربندی ECH از DNS، نادیده گرفتن پیکربندی ابری (یکی از دو، نمی‌توان همزمان فعال کرد)',
                     trojanPassword: 'رمز عبور Trojan (اختیاری):',
                     customPath: 'مسیر سفارشی (d):',
                     customIP: 'ProxyIP سفارشی (p):',
@@ -2643,10 +2680,17 @@
                                 <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(0, 255, 0, 0.3);">
                                     <div style="margin-bottom: 10px;">
                                         <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
-                                            <input type="checkbox" id="ech" style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
+                                            <input type="radio" name="echMode" id="ech" value="cloud" style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                                 <span style="font-size: 1.1rem;">${t.enableECH}</span>
                                         </label>
                                         <small style="color: #00aa00; font-size: 0.8rem; display: block; margin-top: 5px; margin-left: 26px;">${t.enableECHHint}</small>
+                                    </div>
+                                    <div style="margin-bottom: 10px; margin-left: 26px;">
+                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                            <input type="radio" name="echMode" id="echForceQuery" value="dns" style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
+                                                <span style="font-size: 1rem;">${t.enableECHForceQuery}</span>
+                                        </label>
+                                        <small style="color: #00aa00; font-size: 0.8rem; display: block; margin-top: 5px; margin-left: 26px;">${t.enableECHForceQueryHint}</small>
                                     </div>
                                 </div>
                                 <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(0, 255, 0, 0.3);">
@@ -3573,7 +3617,17 @@
                     document.getElementById('ev').checked = config.ev !== 'no';
                     document.getElementById('et').checked = config.et === 'yes';
                     document.getElementById('ex').checked = config.ex === 'yes';
-                    document.getElementById('ech').checked = config.ech === 'yes';
+                    // ECH模式：二选一，默认都不选
+                    if (config.ech === 'yes') {
+                        document.getElementById('ech').checked = true;
+                        document.getElementById('echForceQuery').checked = false;
+                    } else if (config.echForceQuery === 'yes') {
+                        document.getElementById('ech').checked = false;
+                        document.getElementById('echForceQuery').checked = true;
+                    } else {
+                        document.getElementById('ech').checked = false;
+                        document.getElementById('echForceQuery').checked = false;
+                    }
                     document.getElementById('tp').value = config.tp || '';
                     document.getElementById('scu').value = config.scu || '';
                     document.getElementById('epd').checked = config.epd !== 'no';
@@ -3837,15 +3891,36 @@
                     });
                 }
                 
+                // ECH模式互斥逻辑：只能二选一
+                const echRadio = document.getElementById('ech');
+                const echForceQueryRadio = document.getElementById('echForceQuery');
+                if (echRadio && echForceQueryRadio) {
+                    echRadio.addEventListener('change', function() {
+                        if (this.checked) {
+                            echForceQueryRadio.checked = false;
+                        }
+                    });
+                    echForceQueryRadio.addEventListener('change', function() {
+                        if (this.checked) {
+                            echRadio.checked = false;
+                        }
+                    });
+                }
+                
                 const saveProtocolBtn = document.getElementById('saveProtocolBtn');
                 if (saveProtocolBtn) {
                     saveProtocolBtn.addEventListener('click', async function(e) {
                         e.preventDefault();
+                        // ECH模式：二选一，互斥
+                        const echChecked = document.getElementById('ech').checked;
+                        const echForceQueryChecked = document.getElementById('echForceQuery').checked;
+                        
                         const configData = { 
                             ev: document.getElementById('ev').checked ? 'yes' : 'no', 
                             et: document.getElementById('et').checked ? 'yes' : 'no', 
                             ex: document.getElementById('ex').checked ? 'yes' : 'no', 
-                            ech: document.getElementById('ech').checked ? 'yes' : 'no',
+                            ech: echChecked ? 'yes' : 'no',
+                            echForceQuery: echForceQueryChecked ? 'yes' : 'no',
                             tp: document.getElementById('tp').value
                         };
                         
@@ -3864,7 +3939,11 @@
                 if (otherConfigForm) {
                     otherConfigForm.addEventListener('submit', async function(e) {
                         e.preventDefault();
-                        const configData = { ev: document.getElementById('ev').checked ? 'yes' : 'no', et: document.getElementById('et').checked ? 'yes' : 'no', ex: document.getElementById('ex').checked ? 'yes' : 'no', ech: document.getElementById('ech').checked ? 'yes' : 'no', tp: document.getElementById('tp').value,
+                        // ECH模式：二选一，互斥
+                        const echChecked = document.getElementById('ech').checked;
+                        const echForceQueryChecked = document.getElementById('echForceQuery').checked;
+                        
+                        const configData = { ev: document.getElementById('ev').checked ? 'yes' : 'no', et: document.getElementById('et').checked ? 'yes' : 'no', ex: document.getElementById('ex').checked ? 'yes' : 'no', ech: echChecked ? 'yes' : 'no', echForceQuery: echForceQueryChecked ? 'yes' : 'no', tp: document.getElementById('tp').value,
                             d: document.getElementById('customPath').value,
                             p: document.getElementById('customIP').value,
                             yx: document.getElementById('yx').value,
@@ -5811,9 +5890,14 @@
             enableECH = echControl === 'yes' || echControl === true || echControl === 'true';
         }
         
-        // 如果启用了ECH，自动启用仅TLS模式（避免80端口干扰）
+        const echForceQueryControl = getConfigValue('echForceQuery', '');
+        if (echForceQueryControl !== undefined && echForceQueryControl !== '') {
+            echForceQuery = echForceQueryControl === 'yes' || echForceQueryControl === true || echForceQueryControl === 'true';
+        }
+        
+        // 如果启用了ECH或强制DNS查询，自动启用仅TLS模式（避免80端口干扰）
         // ECH需要TLS才能工作，所以必须禁用非TLS节点
-        if (enableECH) {
+        if (enableECH || echForceQuery) {
             disableNonTLS = true;
         }
         
