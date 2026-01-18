@@ -1148,7 +1148,7 @@
                     }
                     
                     if (normalizedPath === normalizedCustomPath + '/sub') {
-                        return await handleSubscriptionRequest(request, at, url);
+                        return await handleSubscriptionRequest(request, at, url, env);
                     }
                     
                     if (url.pathname.length > 1 && url.pathname !== '/') {
@@ -1184,7 +1184,7 @@
                             const user = pathParts[0].substring(1);
                             if (isValidFormat(user)) {
                                 if (user === at) {
-                                    return await handleSubscriptionRequest(request, user, url);
+                                    return await handleSubscriptionRequest(request, user, url, env);
                                 } else {
                                     return new Response(JSON.stringify({ error: 'UUID错误' }), { 
                                         status: 403,
@@ -1196,7 +1196,7 @@
                         }
                     }
                     if (url.pathname.toLowerCase().includes(`/${subPath}`)) {
-                        return await handleSubscriptionRequest(request, at);
+                        return await handleSubscriptionRequest(request, at, null, env);
                     }
                 }
                 return new Response(JSON.stringify({ error: 'Not Found' }), { 
@@ -1388,7 +1388,7 @@
         }
     }
 
-    async function handleSubscriptionRequest(request, user, url = null) {
+    async function handleSubscriptionRequest(request, user, url = null, env = null) {
         if (!url) url = new URL(request.url);
         
         const finalLinks = [];
@@ -2185,9 +2185,11 @@
                     trojanPasswordHint: '设置自定义 Trojan 密码。留空则使用 UUID。客户端会自动对密码进行 SHA224 哈希。',
                     protocolHint: '可以同时启用多个协议。订阅将生成选中协议的节点。<br>• VLESS WS: 基于 WebSocket 的标准协议<br>• Trojan: 使用 SHA224 密码认证<br>• xhttp: 基于 HTTP POST 的伪装协议（需要绑定自定义域名并开启 gRPC）',
                     enableECH: '启用 ECH (Encrypted Client Hello)',
+                    disableECH: '关闭 ECH',
+                    disableECHHint: '不启用ECH功能',
                     enableECHHint: '使用云端下发的ECH配置（环境变量或KV配置中的echConfig）',
                     enableECHForceQuery: '强制DNS查询',
-                    enableECHForceQueryHint: '强制从DNS获取ECH配置，忽略云端配置（二选一，不能同时开启）',
+                    enableECHForceQueryHint: '强制从DNS获取ECH配置，忽略云端配置（三选一，只能选择一个）',
                     saveProtocol: '保存协议配置',
                     subscriptionConverterPlaceholder: '默认: https://url.v1.mk/sub',
                     subscriptionConverterHint: '自定义订阅转换API地址，留空则使用默认地址',
@@ -2679,6 +2681,13 @@
                                 </div>
                                 <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(0, 255, 0, 0.3);">
                                     <div style="margin-bottom: 10px;">
+                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                            <input type="radio" name="echMode" id="echOff" value="off" checked style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
+                                                <span style="font-size: 1.1rem;">${t.disableECH}</span>
+                                        </label>
+                                        <small style="color: #00aa00; font-size: 0.8rem; display: block; margin-top: 5px; margin-left: 26px;">${t.disableECHHint}</small>
+                                    </div>
+                                    <div style="margin-bottom: 10px; margin-left: 26px;">
                                         <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
                                             <input type="radio" name="echMode" id="ech" value="cloud" style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                                 <span style="font-size: 1.1rem;">${t.enableECH}</span>
@@ -3617,14 +3626,17 @@
                     document.getElementById('ev').checked = config.ev !== 'no';
                     document.getElementById('et').checked = config.et === 'yes';
                     document.getElementById('ex').checked = config.ex === 'yes';
-                    // ECH模式：二选一，默认都不选
+                    // ECH模式：三选一，默认关闭
                     if (config.ech === 'yes') {
+                        document.getElementById('echOff').checked = false;
                         document.getElementById('ech').checked = true;
                         document.getElementById('echForceQuery').checked = false;
                     } else if (config.echForceQuery === 'yes') {
+                        document.getElementById('echOff').checked = false;
                         document.getElementById('ech').checked = false;
                         document.getElementById('echForceQuery').checked = true;
                     } else {
+                        document.getElementById('echOff').checked = true;
                         document.getElementById('ech').checked = false;
                         document.getElementById('echForceQuery').checked = false;
                     }
@@ -3891,27 +3903,14 @@
                     });
                 }
                 
-                // ECH模式互斥逻辑：只能二选一
-                const echRadio = document.getElementById('ech');
-                const echForceQueryRadio = document.getElementById('echForceQuery');
-                if (echRadio && echForceQueryRadio) {
-                    echRadio.addEventListener('change', function() {
-                        if (this.checked) {
-                            echForceQueryRadio.checked = false;
-                        }
-                    });
-                    echForceQueryRadio.addEventListener('change', function() {
-                        if (this.checked) {
-                            echRadio.checked = false;
-                        }
-                    });
-                }
+                // ECH模式互斥逻辑：三选一（radio按钮自动互斥）
                 
                 const saveProtocolBtn = document.getElementById('saveProtocolBtn');
                 if (saveProtocolBtn) {
                     saveProtocolBtn.addEventListener('click', async function(e) {
                         e.preventDefault();
-                        // ECH模式：二选一，互斥
+                        // ECH模式：三选一，互斥
+                        const echOffChecked = document.getElementById('echOff').checked;
                         const echChecked = document.getElementById('ech').checked;
                         const echForceQueryChecked = document.getElementById('echForceQuery').checked;
                         
@@ -3923,6 +3922,12 @@
                             echForceQuery: echForceQueryChecked ? 'yes' : 'no',
                             tp: document.getElementById('tp').value
                         };
+                        
+                        // 如果选择了关闭，确保两个都是no
+                        if (echOffChecked) {
+                            configData.ech = 'no';
+                            configData.echForceQuery = 'no';
+                        }
                         
                         if (!document.getElementById('ev').checked && 
                             !document.getElementById('et').checked && 
@@ -3939,7 +3944,8 @@
                 if (otherConfigForm) {
                     otherConfigForm.addEventListener('submit', async function(e) {
                         e.preventDefault();
-                        // ECH模式：二选一，互斥
+                        // ECH模式：三选一，互斥
+                        const echOffChecked = document.getElementById('echOff').checked;
                         const echChecked = document.getElementById('ech').checked;
                         const echForceQueryChecked = document.getElementById('echForceQuery').checked;
                         
@@ -3951,6 +3957,12 @@
                             s: document.getElementById('socksConfig').value,
                             homepage: document.getElementById('customHomepage').value
                         };
+                        
+                        // 如果选择了关闭ECH，确保两个都是no
+                        if (echOffChecked) {
+                            configData.ech = 'no';
+                            configData.echForceQuery = 'no';
+                        }
                         
                         // 确保至少选择一个协议
                         if (!document.getElementById('ev').checked && 
