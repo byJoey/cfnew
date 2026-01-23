@@ -1,3 +1,5 @@
+    // CFnew - 终端 v2.9.3
+    // 版本: v2.9.3
     import { connect } from 'cloudflare:sockets';
     let at = '351c9981-04b6-4103-aa4b-864aa9c91469';
     let fallbackAddress = '';
@@ -20,8 +22,8 @@
     let tp = '';
     // 启用ECH功能（true启用，false禁用）
     let enableECH = false;  
-    // 自定义DNS服务器（默认：https://dns.alidns.com/dns-query）
-    let customDNS = 'https://dns.alidns.com/dns-query';
+    // 自定义DNS服务器（默认：https://dns.jhb.ovh/joeyblog）
+    let customDNS = 'https://dns.jhb.ovh/joeyblog';
     // 自定义ECH域名（默认：cloudflare-ech.com）
     let customECHDomain = 'cloudflare-ech.com';
 
@@ -1274,8 +1276,10 @@
                 }
                 
                 if (ech) {
+                    const echDomain = customECHDomain || 'cloudflare-ech.com';
                     node['ech-opts'] = {
-                        enable: true
+                        enable: true,
+                        'query-server-name': echDomain
                     };
                 }
                 
@@ -1320,8 +1324,10 @@
                 }
                 
                 if (ech) {
+                    const echDomain = customECHDomain || 'cloudflare-ech.com';
                     node['ech-opts'] = {
-                        enable: true
+                        enable: true,
+                        'query-server-name': echDomain
                     };
                 }
                 
@@ -1367,10 +1373,11 @@
                             // 检查最后一个 } 之前是否有内容，确保格式正确
                             const beforeBrace = line.substring(0, lastBraceIndex).trim();
                             if (beforeBrace.length > 0) {
-                                // 在最后一个 } 之前添加 , ech-opts: {enable: true}
+                                // 在最后一个 } 之前添加 , ech-opts: {enable: true, query-server-name: ...}
                                 // 确保在逗号前有空格
+                                const echDomain = customECHDomain || 'cloudflare-ech.com';
                                 const needsComma = !beforeBrace.endsWith(',') && !beforeBrace.endsWith('{');
-                                return line.substring(0, lastBraceIndex) + (needsComma ? ', ' : ' ') + 'ech-opts: {enable: true}' + line.substring(lastBraceIndex);
+                                return line.substring(0, lastBraceIndex) + (needsComma ? ', ' : ' ') + `ech-opts: {enable: true, query-server-name: ${echDomain}}` + line.substring(lastBraceIndex);
                             }
                         }
                     }
@@ -1385,7 +1392,7 @@
             // 替换 DNS nameserver 为阿里的加密 DNS
             clashConfig = clashConfig.replace(/^(\s*nameserver:\s*\n)((?:\s*-\s*[^\n]+\n)*)/m, (match, header, items) => {
                 // 替换所有 nameserver 项为阿里的加密 DNS
-                const dnsServer = customDNS || 'https://dns.alidns.com/dns-query';
+                const dnsServer = customDNS || 'https://dns.jhb.ovh/joeyblog';
                 return header + `    - ${dnsServer}\n`;
             });
             
@@ -1555,7 +1562,7 @@
         // 如果启用了ECH，使用自定义值
         let echConfig = null;
         if (enableECH) {
-            const dnsServer = customDNS || 'https://dns.alidns.com/dns-query';
+            const dnsServer = customDNS || 'https://dns.jhb.ovh/joeyblog';
             const echDomain = customECHDomain || 'cloudflare-ech.com';
             echConfig = `${echDomain}+${dnsServer}`;
         }
@@ -1788,7 +1795,7 @@
                     
                     // 如果启用了ECH，添加ech参数（ECH需要伪装成Chrome浏览器）
                     if (enableECH) {
-                        const dnsServer = customDNS || 'https://dns.alidns.com/dns-query';
+                        const dnsServer = customDNS || 'https://dns.jhb.ovh/joeyblog';
                         const echDomain = customECHDomain || 'cloudflare-ech.com';
                         wsParams.set('alpn', 'h3,h2,http/1.1');
                         wsParams.set('ech', `${echDomain}+${dnsServer}`);
@@ -1869,7 +1876,7 @@
                     
                     // 如果启用了ECH，添加ech参数（ECH需要伪装成Chrome浏览器）
                     if (enableECH) {
-                        const dnsServer = customDNS || 'https://dns.alidns.com/dns-query';
+                        const dnsServer = customDNS || 'https://dns.jhb.ovh/joeyblog';
                         const echDomain = customECHDomain || 'cloudflare-ech.com';
                         wsParams.set('alpn', 'h3,h2,http/1.1');
                         wsParams.set('ech', `${echDomain}+${dnsServer}`);
@@ -2349,7 +2356,7 @@
                     enableECH: '启用 ECH (Encrypted Client Hello)',
                     enableECHHint: '启用后，每次刷新订阅时会自动从 DoH 获取最新的 ECH 配置并添加到链接中',
                     customDNS: '自定义 DNS 服务器',
-                    customDNSPlaceholder: '例如: https://dns.alidns.com/dns-query',
+                    customDNSPlaceholder: '例如: https://dns.jhb.ovh/joeyblog',
                     customDNSHint: '用于ECH配置查询的DNS服务器地址（DoH格式）',
                     customECHDomain: '自定义 ECH 域名',
                     customECHDomainPlaceholder: '例如: cloudflare-ech.com',
@@ -2378,7 +2385,7 @@
                         KR: '🇰🇷 韩国', DE: '🇩🇪 德国', SE: '🇸🇪 瑞典', NL: '🇳🇱 荷兰',
                         FI: '🇫🇮 芬兰', GB: '🇬🇧 英国'
                     },
-                    terminal: '终端 v2.9.2',
+                    terminal: '终端 v2.9.3',
                     githubProject: 'GitHub 项目',
                     autoDetectClient: '自动识别',
                 selectionLogicText: '同地区 → 邻近地区 → 其他地区',
@@ -2433,7 +2440,7 @@
                     enableECH: 'فعال‌سازی ECH (Encrypted Client Hello)',
                     enableECHHint: 'پس از فعال‌سازی، در هر بار تازه‌سازی اشتراک، پیکربندی ECH به‌روز به‌طور خودکار از DoH دریافت شده و به لینک‌ها اضافه می‌شود',
                     customDNS: 'سرور DNS سفارشی',
-                    customDNSPlaceholder: 'مثال: https://dns.alidns.com/dns-query',
+                    customDNSPlaceholder: 'مثال: https://dns.jhb.ovh/joeyblog',
                     customDNSHint: 'آدرس سرور DNS برای جستجوی پیکربندی ECH (فرمت DoH)',
                     customECHDomain: 'دامنه ECH سفارشی',
                     customECHDomainPlaceholder: 'مثال: cloudflare-ech.com',
@@ -2517,7 +2524,7 @@
                         KR: '🇰🇷 کره جنوبی', DE: '🇩🇪 آلمان', SE: '🇸🇪 سوئد', NL: '🇳🇱 هلند',
                         FI: '🇫🇮 فنلاند', GB: '🇬🇧 بریتانیا'
                     },
-                    terminal: 'ترمینال v2.9.2',
+                    terminal: 'ترمینال v2.9.3',
                     githubProject: 'پروژه GitHub',
                     autoDetectClient: 'تشخیص خودکار',
                 selectionLogicText: 'هم‌منطقه → منطقه مجاور → سایر مناطق',
@@ -5581,7 +5588,7 @@
                 
                 // 如果启用了ECH，添加ech参数（ECH需要伪装成Chrome浏览器）
                 if (enableECH) {
-                    const dnsServer = customDNS || 'https://dns.alidns.com/dns-query';
+                    const dnsServer = customDNS || 'https://dns.jhb.ovh/joeyblog';
                     const echDomain = customECHDomain || 'cloudflare-ech.com';
                     link += `&alpn=h3%2Ch2%2Chttp%2F1.1&ech=${encodeURIComponent(`${echDomain}+${dnsServer}`)}`;
                 }
@@ -5602,7 +5609,7 @@
                 
                 // 如果启用了ECH，添加ech参数（ECH需要伪装成Chrome浏览器）
                 if (enableECH) {
-                    const dnsServer = customDNS || 'https://dns.alidns.com/dns-query';
+                    const dnsServer = customDNS || 'https://dns.jhb.ovh/joeyblog';
                     const echDomain = customECHDomain || 'cloudflare-ech.com';
                     link += `&alpn=h3%2Ch2%2Chttp%2F1.1&ech=${encodeURIComponent(`${echDomain}+${dnsServer}`)}`;
                 }
@@ -5640,7 +5647,7 @@
             
             // 如果启用了ECH，添加ech参数（ECH需要伪装成Chrome浏览器）
             if (enableECH) {
-                const dnsServer = customDNS || 'https://dns.alidns.com/dns-query';
+                const dnsServer = customDNS || 'https://dns.jhb.ovh/joeyblog';
                 const echDomain = customECHDomain || 'cloudflare-ech.com';
                 params.set('alpn', 'h3,h2,http/1.1');
                 params.set('ech', `${echDomain}+${dnsServer}`);
@@ -5673,7 +5680,7 @@
                 
                 // 如果启用了ECH，添加ech参数（ECH需要伪装成Chrome浏览器）
                 if (enableECH) {
-                    const dnsServer = customDNS || 'https://dns.alidns.com/dns-query';
+                    const dnsServer = customDNS || 'https://dns.jhb.ovh/joeyblog';
                     const echDomain = customECHDomain || 'cloudflare-ech.com';
                     link += `&alpn=h3%2Ch2%2Chttp%2F1.1&ech=${encodeURIComponent(`${echDomain}+${dnsServer}`)}`;
                 }
@@ -5694,7 +5701,7 @@
                 
                 // 如果启用了ECH，添加ech参数（ECH需要伪装成Chrome浏览器）
                 if (enableECH) {
-                    const dnsServer = customDNS || 'https://dns.alidns.com/dns-query';
+                    const dnsServer = customDNS || 'https://dns.jhb.ovh/joeyblog';
                     const echDomain = customECHDomain || 'cloudflare-ech.com';
                     link += `&alpn=h3%2Ch2%2Chttp%2F1.1&ech=${encodeURIComponent(`${echDomain}+${dnsServer}`)}`;
                 }
@@ -6105,7 +6112,7 @@
         if (customDNSValue && customDNSValue.trim()) {
             customDNS = customDNSValue.trim();
         } else {
-            customDNS = 'https://dns.alidns.com/dns-query';
+            customDNS = 'https://dns.jhb.ovh/joeyblog';
         }
         
         const customECHDomainValue = getConfigValue('customECHDomain', '');
