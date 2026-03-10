@@ -1,4 +1,4 @@
-# CFnew - 终端 v2.9.3
+# CFnew - 终端 v2.9.4
 
 **语言:** [中文](README.md) | [فارسی](فارسی.md)
 
@@ -16,6 +16,13 @@
 - 应用唤醒：点按钮自动打开对应客户端
 - 自动识别：根据User-Agent自动返回对应格式
 - 多语言：支持中文和波斯语，根据浏览器语言自动切换
+
+## v2.9.4 更新
+
+- 支持客户端通过 WebSocket path 参数覆盖连接级变量（`p`、`wk`、`rm`、`s`）
+  - 无需为每个节点单独部署 Worker，在分享链接的 path 里直接写参数即可
+  - 优先级：path 参数 > KV/环境变量全局配置 > 自动检测
+  - 详见下方「[客户端 path 参数](#客户端-path-参数)」说明
 
 ## v2.9.3 更新
 
@@ -63,10 +70,10 @@
 | 变量名 | 值 | 说明 |
 | :--- | :--- | :--- |
 | `u` | 你的 UUID | 必需，用于访问订阅和配置界面 |
-| `p` | proxyip | 可选，自定义ProxyIP地址和端口 |
-| `s` | 你的SOCKS5地址 | 可选，格式：`user:pass@host:port` 或 `host:port` |
+| `p` | proxyip | 可选，自定义ProxyIP地址和端口，支持 IPv4/IPv6/域名。设置后 `wk` 地区匹配失效（互斥）。也可在节点 path 里单独指定 |
+| `s` | 你的SOCKS5地址 | 可选，格式：`user:pass@host:port` 或 `host:port`。也可在节点 path 里单独指定 |
 | `d` | 自定义路径 | 可选，如 `/mypath` 或 `/path/to/sub`，不填用UUID路径。路径没 `/` 开头会自动补上 |
-| `wk` | 地区代码 | 可选，手动指定Worker地区，如 `SG`、`HK`、`US`、`JP` |
+| `wk` | 地区代码 | 可选，手动指定Worker地区，如 `SG`、`HK`、`US`、`JP`。设置 `p` 后此项失效（互斥）。也可在节点 path 里单独指定 |
 
 #### 协议配置
 
@@ -221,10 +228,42 @@ v2.7开始提供，v2.9增强了筛选功能
   - `POST /{UUID或路径}/api/preferred-ips` - 添加（单个/批量）
   - `DELETE /{UUID或路径}/api/preferred-ips` - 删除（单个/全部）
 
+#### 客户端 path 参数
+
+v2.9.4 新增。在 VLESS/Trojan 分享链接的 `path` 字段里追加查询参数，即可为**单个节点**单独指定连接级配置，无需额外部署 Worker。
+
+| 参数 | 作用 | 示例 |
+| :--- | :--- | :--- |
+| `p` | 覆盖 ProxyIP（支持带端口） | `p=1.1.1.1` 或 `p=1.2.3.4:8443` |
+| `wk` | 覆盖 Worker 地区 | `wk=jp`、`wk=us`、`wk=sg` |
+| `rm` | 关闭地区智能匹配 | `rm=no` |
+| `s` | 覆盖 SOCKS5 代理 | `s=user:pass@host:1080` |
+
+**优先级：path 参数 > KV/环境变量 > 自动检测**
+
+> ⚠️ **`p` 和 `wk` 互斥**：设置 `p` 后会直接使用指定的 ProxyIP，`wk` 的地区匹配逻辑被完全跳过，两者同时写只有 `p` 生效。
+
+path 示例：
+```
+# 指定 ProxyIP（不要同时写 wk）
+/?ed=2048&p=1.1.1.1
+/?ed=2048&p=proxy.example.com:443
+/?ed=2048&p=[2001:db8::1]:443
+
+# 指定地区（让 Worker 自动选该地区的 ProxyIP）
+/?ed=2048&wk=jp
+/?ed=2048&wk=sg&rm=no
+
+# 指定 SOCKS5（可与 wk 搭配）
+/?ed=2048&s=user:pass@socks5.host:1080&wk=us
+```
+
+> 不在上表中的变量（如 `ev`、`et`、`yx` 等）属于订阅生成级配置，在 WebSocket 握手阶段已过路由，放在 path 里无效，仍需在环境变量或 KV 中设置。
+
 #### 手动指定地区
 
 - 可以手动指定Worker地区，覆盖自动检测
-- 设置方式：`wk=SG` 或图形界面选择
+- 设置方式：`wk=SG` 或图形界面选择，或在节点 path 里加 `wk=SG`
 - 支持：US、SG、JP、HK、KR、DE、SE、NL、FI、GB
 
 #### 优选节点命名
