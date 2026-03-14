@@ -1,5 +1,5 @@
-    // CFnew - 终端 v2.9.4
-    // 版本: v2.9.4
+    // CFnew - 终端 v2.9.5
+    // 版本: v2.9.5
     import { connect } from 'cloudflare:sockets';
     let at = '351c9981-04b6-4103-aa4b-864aa9c91469';
     let fallbackAddress = '';
@@ -1258,13 +1258,21 @@
                     uuid: uuid,
                     tls: tls,
                     network: network,
-                    'client-fingerprint': fingerprint
+                    'client-fingerprint': fingerprint,
+                    'remote-dns': '8.8.8.8' // 指定远程 DNS 参数
                 };
                 
                 if (tls) {
                     node.servername = servername;
                     node.alpn = alpn.split(',').map(a => a.trim());
                     node['skip-cert-verify'] = false;
+                    
+                    // 为 TLS 开启片段 (根据 VLESS/Xray 官方规范，拆分 1,40-60,30-50,tlshello 参数)
+                    node.fragment = {
+                        packets: 'tlshello',
+                        length: '40-60',
+                        interval: '30-50'
+                    };
                 }
                 
                 if (network === 'ws') {
