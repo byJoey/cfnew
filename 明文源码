@@ -1,5 +1,5 @@
-    // CFnew - 终端 v2.9.4
-    // 版本: v2.9.4
+    // CFnew - 终端 v2.9.5
+    // 版本: v2.9.5
     import { connect } from 'cloudflare:sockets';
     let at = '351c9981-04b6-4103-aa4b-864aa9c91469';
     let fallbackAddress = '';
@@ -1258,13 +1258,21 @@
                     uuid: uuid,
                     tls: tls,
                     network: network,
-                    'client-fingerprint': fingerprint
+                    'client-fingerprint': fingerprint,
+                    'remote-dns': 'https://dns.google/dns-query' // 指定远程 DNS 参数。可以将 8.8.8.8 替换为 DoH (DNS over HTTPS) https://dns.google/dns-query
                 };
                 
                 if (tls) {
                     node.servername = servername;
                     node.alpn = alpn.split(',').map(a => a.trim());
                     node['skip-cert-verify'] = false;
+                    
+                    // 为 TLS 开启片段 (根据 VLESS/Xray 官方规范，拆分 1,40-60,30-50,tlshello 参数)
+                    node.fragment = {
+                        packets: 'tlshello',
+                        length: '40-60',
+                        interval: '30-50'
+                    };
                 }
                 
                 if (network === 'ws') {
@@ -3901,26 +3909,32 @@
                 }
             }
             
-            // 更新路径类型显示
-            function updatePathTypeStatus(cp) {
-                const pathTypeStatus = document.getElementById('pathTypeStatus');
-                const currentUrl = window.location.href;
-                const pathParts = window.location.pathname.split('/').filter(p => p);
-                const currentPath = pathParts.length > 0 ? pathParts[0] : '';
-                
-                if (cp && cp.trim()) {
-                    // 使用自定义路径 (d)
-                    pathTypeStatus.innerHTML = '<div style="color: #44ff44;">使用类型: <strong>自定义路径 (d)</strong></div>' +
-                        '<div style="margin-top: 5px; color: #00ff00;">当前路径: <span style="color: #ffaa00;">' + cp + '</span></div>' +
-                        '<div style="margin-top: 5px; font-size: 0.9rem; color: #00aa00;">访问地址: ' + 
-                        (currentUrl.split('/')[0] + '//' + currentUrl.split('/')[2]) + cp + '/sub</div>';
-                } else {
-                    // 使用 UUID (u)
-                    pathTypeStatus.innerHTML = '<div style="color: #44ff44;">使用类型: <strong>UUID 路径 (u)</strong></div>' +
-                        '<div style="margin-top: 5px; color: #00ff00;">当前路径: <span style="color: #ffaa00;">' + (currentPath || '(UUID)') + '</span></div>' +
-                        '<div style="margin-top: 5px; font-size: 0.9rem; color: #00aa00;">访问地址: ' + currentUrl.split('/sub')[0] + '/sub</div>';
-                }
+                // 更新路径类型显示
+    function updatePathTypeStatus(cp) {
+        const pathTypeStatus = document.getElementById('pathTypeStatus');
+        const currentUrl = window.location.href;
+        const pathParts = window.location.pathname.split('/').filter(p => p);
+        const currentPath = pathParts.length > 0 ? pathParts[0] : '';
+        
+        if (cp && cp.trim()) {
+            // 处理前导斜杠：如果没有以 / 开头，则自动补全
+            let formattedCp = cp.trim();
+            if (!formattedCp.startsWith('/')) {
+                formattedCp = '/' + formattedCp;
             }
+
+            // 使用自定义路径 (d)
+            pathTypeStatus.innerHTML = '<div style="color: #44ff44;">使用类型: <strong>自定义路径 (d)</strong></div>' +
+                '<div style="margin-top: 5px; color: #00ff00;">当前路径: <span style="color: #ffaa00;">' + formattedCp + '</span></div>' +
+                '<div style="margin-top: 5px; font-size: 0.9rem; color: #00aa00;">访问地址: ' + 
+                (currentUrl.split('/')[0] + '//' + currentUrl.split('/')[2]) + formattedCp + '/sub</div>';
+        } else {
+            // 使用 UUID (u)
+            pathTypeStatus.innerHTML = '<div style="color: #44ff44;">使用类型: <strong>UUID 路径 (u)</strong></div>' +
+                '<div style="margin-top: 5px; color: #00ff00;">当前路径: <span style="color: #ffaa00;">' + (currentPath || '(UUID)') + '</span></div>' +
+                '<div style="margin-top: 5px; font-size: 0.9rem; color: #00aa00;">访问地址: ' + currentUrl.split('/sub')[0] + '/sub</div>';
+        }
+    }
             
             // 更新wk地区选择的启用/禁用状态
             function updateWkRegionState() {
