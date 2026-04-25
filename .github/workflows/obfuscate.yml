@@ -2,8 +2,11 @@ name: Generate and Obfuscate Worker Script
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 * * * *'
+  push:
+    branches:
+      - '**'  # 仅匹配分支推送，排除标签推送
+    paths:
+      - '明文源吗'
 
 jobs:
   build-and-obfuscate:
@@ -23,52 +26,67 @@ jobs:
 
       - name: Obfuscate from local source file
         run: |
-          node -e "
-            const JavaScriptObfuscator = require('javascript-obfuscator');
-            const fs = require('fs');
-            const path = require('path');
-            
-            const sourceFileName = '明文源吗';
-            const outputFileName = '少年你相信光吗';
-            const sourceFilePath = path.join(process.cwd(), sourceFileName);
+          cat > obfuscate.js << 'EOF'
+          const JavaScriptObfuscator = require('javascript-obfuscator');
+          const fs = require('fs');
+          const path = require('path');
+          
+          const sourceFileName = '明文源吗';
+          const outputFileName = '少年你相信光吗';
+          const sourceFilePath = path.join(process.cwd(), sourceFileName);
 
-            if (!fs.existsSync(sourceFilePath)) {
-              console.error(`错误：在路径 '$\{sourceFilePath\}' 未找到源文件。请确保您的仓库根目录有名为 '明文源吗' 的文件。`);
-              process.exit(1);
-            }
+          if (!fs.existsSync(sourceFilePath)) {
+            console.error('错误：在路径 \'' + sourceFilePath + '\' 未找到源文件。请确保您的仓库根目录有名为 \'明文源吗\' 的文件。');
+            process.exit(1);
+          }
 
-            const originalCode = fs.readFileSync(sourceFilePath, 'utf8');
+          const originalCode = fs.readFileSync(sourceFilePath, 'utf8');
 
-            if (!originalCode || originalCode.trim().length === 0) {
-              console.error('错误：源文件 ' + sourceFileName + ' 为空。');
-              process.exit(1);
-            }
+          if (!originalCode || originalCode.trim().length === 0) {
+            console.error('错误：源文件 ' + sourceFileName + ' 为空。');
+            process.exit(1);
+          }
 
-            // --- 最终平衡型混淆配置 ---
-            const obfuscationOptions = {
-                compact: true,
-                controlFlowFlattening: true,
-                controlFlowFlatteningThreshold: 0.75,
-                deadCodeInjection: true,
-                deadCodeInjectionThreshold: 0.4,
-                stringArray: true,
-                stringArrayEncoding: ['base64'],
-                stringArrayThreshold: 0.75,
-                renameGlobals: true,
-                identifierNamesGenerator: 'mangled',
-                numbersToExpressions: true,
-                splitStrings: true,
-                splitStringsChunkLength: 10,
-                transformObjectKeys: true,
-                selfDefending: false,
-                debugProtection: false
-            };
+          const obfuscationOptions = {
+              compact: true,
+              controlFlowFlattening: false,
+              controlFlowFlatteningThreshold: 0,
+              deadCodeInjection: false,
+              stringArray: true,
+              stringArrayEncoding: ['base64'],
+              stringArrayThreshold: 1.0,
+              stringArrayRotate: true,
+              stringArrayShuffle: true,
+              stringArrayWrappersCount: 2,
+              stringArrayWrappersChainedCalls: false,
+              stringArrayWrappersParametersMaxCount: 3,
+              renameGlobals: true,
+              identifierNamesGenerator: 'mangled-shuffled',
+              identifierNamesCache: null,
+              identifiersPrefix: '',
+              renameProperties: false,
+              renamePropertiesMode: 'safe',
+              ignoreImports: false,
+              target: 'browser',
+              numbersToExpressions: false,
+              simplify: false,
+              splitStrings: true,
+              splitStringsChunkLength: 1,
+              transformObjectKeys: false,
+              unicodeEscapeSequence: true,
+              selfDefending: false,
+              debugProtection: false,
+              debugProtectionInterval: 0,
+              disableConsoleOutput: true,
+              domainLock: []
+          };
 
-            const obfuscatedCode = JavaScriptObfuscator.obfuscate(originalCode, obfuscationOptions).getObfuscatedCode();
-            
-            fs.writeFileSync(path.join(process.cwd(), outputFileName), obfuscatedCode, 'utf8');
-            console.log(`成功将 '$\{sourceFileName\}' 混淆并保存至 '$\{outputFileName\}'。`);
-          "
+          const obfuscatedCode = JavaScriptObfuscator.obfuscate(originalCode, obfuscationOptions).getObfuscatedCode();
+          
+          fs.writeFileSync(path.join(process.cwd(), outputFileName), obfuscatedCode, 'utf8');
+          console.log('成功将 \'' + sourceFileName + '\' 混淆并保存至 \'' + outputFileName + '\'。');
+          EOF
+          node obfuscate.js
 
       - name: Commit and push the obfuscated file
         run: |
@@ -78,6 +96,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to commit, the obfuscated file is already up-to-date."
           else
-            git commit -m "build: Generate and obfuscate worker script"
+            git commit -m "部署用这个"
             git push
           fi
