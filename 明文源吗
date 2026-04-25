@@ -1,6 +1,6 @@
 import { connect } from 'cloudflare:sockets';
 
-let authToken = '351c9981-04b6-4103-aa4b-864aa9c91469';
+let authToken = 'e258977b-e413-4718-a3af-02d75492c349';
 let fallbackAddress = 'all.ai9527.top';
 let fallbackPort = '443';
 let socks5Config = '';
