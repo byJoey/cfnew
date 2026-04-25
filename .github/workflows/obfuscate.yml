@@ -82,8 +82,13 @@ jobs:
           };
 
           const obfuscatedCode = JavaScriptObfuscator.obfuscate(originalCode, obfuscationOptions).getObfuscatedCode();
+          
+          // ==============================================
+          // 在这里给混淆后的代码 最前面 加上一行代码
+          // ==============================================
           const finalCode = 'var window = globalThis;\n' + obfuscatedCode;
-          fs.writeFileSync(path.join(process.cwd(), outputFileName), obfuscatedCode, 'utf8');
+
+          fs.writeFileSync(path.join(process.cwd(), outputFileName), finalCode, 'utf8');
           console.log('成功将 \'' + sourceFileName + '\' 混淆并保存至 \'' + outputFileName + '\'。');
           EOF
           node obfuscate.js
