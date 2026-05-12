@@ -1,0 +1,16 @@
+name: 自动同步上游
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 同步Fork
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
+        with:
+          upstream_repository: byJoey/cfnew
+          target_branch: main
+          upstream_branch: main
