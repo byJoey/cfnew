@@ -8,9 +8,15 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: 同步Fork
+      - name: 拉取仓库代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 同步 Fork
         uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
         with:
-          upstream_repository: byJoey/cfnew
-          target_branch: main
-          upstream_branch: main
+          upstream_sync_repo: byJoey/cfnew
+          upstream_sync_branch: main
+          target_sync_branch: main
+          test_mode: false
