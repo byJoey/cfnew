@@ -26,7 +26,7 @@
     // 自定义ECH域名（默认：cloudflare-ech.com）
     let customECHDomain = 'cloudflare-ech.com';
 
-    let scu = 'https://url.v1.mk/sub';  
+    let scu = 'https://api.wcc.best/sub';  
     // 远程配置URL（硬编码）
     const remoteConfigUrl = 'https://raw.githubusercontent.com/byJoey/test/refs/heads/main/tist.ini';
 
