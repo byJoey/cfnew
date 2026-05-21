@@ -1,10 +1,9 @@
 name: 自动同步上游
 on:
   schedule:
-    - cron: '0 0 * * *'  # 每天0点执行
-  workflow_dispatch:    # 允许手动触发
+    - cron: '0 0 * * *'
+  workflow_dispatch:
 
-# 消除 Node.js 20 弃用警告
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -12,7 +11,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # 必须加：给 GITHUB_TOKEN 写入权限
+      contents: write
     steps:
       - name: 拉取仓库代码
         uses: actions/checkout@v4
@@ -20,11 +19,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: 同步 Fork
-        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
-        with:
-          upstream_repository: byJoey/cfnew  # 修正参数名
-          upstream_branch: main             # 修正参数名
-          target_branch: main               # 修正参数名
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          test_mode: false
+      - name: 添加上游仓库并强制同步
+        run: |
+          git remote add upstream https://github.com/byJoey/cfnew.git
+          git fetch upstream main
+          git checkout main
+          git reset --hard upstream/main
+          git push origin main --force
