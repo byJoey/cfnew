@@ -24,6 +24,24 @@
       </button>
     </div>
 
+
+    <!-- UUID Input -->
+    <div class="ios-card">
+      <h2 class="card-title">{{ t('uuidLabel') || '订阅密钥' }}</h2>
+      <div class="form-group">
+        <input 
+          v-model="userUuid" 
+          type="text" 
+          class="ios-input" 
+          :placeholder="t('uuidPlaceholder') || '请输入您的订阅密钥(UUID)'"
+          @input="onUuidChange"
+        />
+        <p class="form-hint" style="color: var(--ios-secondary); font-size: 0.75rem;">
+          {{ t('uuidHint') || '您的订阅密钥，用于生成专属订阅链接' }}
+        </p>
+      </div>
+    </div>
+
     <!-- Client Selection -->
     <div class="ios-card">
       <h2 class="card-title">{{ t('selectClient') }}</h2>
@@ -421,6 +439,7 @@ const regionNames = {
 // State
 const selectedClient = ref('')
 const subscriptionUrl = ref('')
+const userUuid = ref(localStorage.getItem('cfnew_uuid') || '')
 const regionStatus = ref('🇺🇸 美国')
 const detectionMethod = ref('Cloudflare内置检测')
 const echStatus = ref('检测中...')
@@ -474,6 +493,27 @@ function setLocale(lang) {
   document.cookie = `preferredLanguage=${lang}; path=/; expires=${expiryDate.toUTCString()}; SameSite=Lax`
 }
 
+function onUuidChange() {
+  localStorage.setItem('cfnew_uuid', userUuid.value)
+  updateSubscriptionUrl()
+}
+
+
+function getApiUrl(path) {
+  const base = import.meta.env.VITE_WORKER_URL || ''
+  if (!userUuid.value) return base + path
+  return base + '/' + userUuid.value + path
+}
+
+function updateSubscriptionUrl() {
+  if (!userUuid.value) {
+    subscriptionUrl.value = ''
+    return
+  }
+  const base = import.meta.env.VITE_WORKER_URL || ''
+  subscriptionUrl.value = base + '/' + userUuid.value + '/sub'
+}
+
 function statusClass(status) {
   if (status.includes('检测') || status.includes('در حال')) return ''
   if (status.includes('失败') || status.includes('ناموفق')) return 'error'
@@ -487,7 +527,7 @@ function selectClient(client) {
 
 function generateClientLink(client) {
   const currentUrl = window.location.href
-  subscriptionUrl.value = currentUrl + '/sub'
+  subscriptionUrl.value = import.meta.env.getApiUrl('/sub')
   
   // Try to open app or copy to clipboard
   const schemeUrl = getSchemeUrl(client)
@@ -561,7 +601,7 @@ function showToast(message, type = '') {
 
 async function checkSystemStatus() {
   try {
-    const response = await fetch(window.location.pathname + '/region')
+    const response = await fetch(import.meta.env.getApiUrl('/region'))
     const data = await response.json()
     
     if (data.region === 'CUSTOM') {
@@ -579,7 +619,7 @@ async function checkSystemStatus() {
 
 async function checkKVStatus() {
   try {
-    const response = await fetch(window.location.pathname + '/api/config')
+    const response = await fetch(import.meta.env.getApiUrl('/api/config'))
     
     if (response.status === 503) {
       kvStatus.value = t('kvNotEnabled')
@@ -603,7 +643,7 @@ async function checkKVStatus() {
 
 async function checkECHStatus() {
   try {
-    const subUrl = window.location.href + '/sub'
+    const subUrl = import.meta.env.getApiUrl('/sub')
     const response = await fetch(subUrl, {
       method: 'GET',
       headers: { 'Accept': 'text/plain' }
@@ -625,7 +665,7 @@ async function checkECHStatus() {
 
 async function loadConfig() {
   try {
-    const response = await fetch(window.location.pathname + '/api/config')
+    const response = await fetch(import.meta.env.getApiUrl('/api/config'))
     if (!response.ok) return
     
     const data = await response.json()
@@ -649,7 +689,7 @@ async function saveConfig() {
   }
 
   try {
-    const response = await fetch(window.location.pathname + '/api/config', {
+    const response = await fetch(import.meta.env.getApiUrl('/api/config'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config)
@@ -674,7 +714,7 @@ async function resetConfig() {
   }
 
   try {
-    const response = await fetch(window.location.pathname + '/api/config', {
+    const response = await fetch(import.meta.env.getApiUrl('/api/config'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

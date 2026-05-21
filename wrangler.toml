@@ -1,1 +1,8 @@
+name = "cfnew"
 compatibility_date = "2026-01-20"
+main = "worker.js"
+account_id = "060f73f6854fc6dc3232d4d85704bd3f"
+
+[[kv_namespaces]]
+binding = "C"
+id = "1d8d85c982a141ada33098ff80cee3bc"
