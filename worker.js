@@ -4598,6 +4598,189 @@ body::before, body::after {
                         function createMatrixRain() {
                 // Matrix rain removed for iOS flat style - element deleted from DOM
             }
+async function checkSystemStatus() {
+                try {
+                    const cfStatus = document.getElementById('cfStatus');
+                    const regionStatus = document.getElementById('regionStatus');
+                    const geoInfo = document.getElementById('geoInfo');
+                    const backupStatus = document.getElementById('backupStatus');
+                    const currentIP = document.getElementById('currentIP');
+                    const regionMatch = document.getElementById('regionMatch');
+
+                    function getCookie(name) {
+                        const value = '; ' + document.cookie;
+                        const parts = value.split('; ' + name + '=');
+                        if (parts.length === 2) return parts.pop().split(';').shift();
+                        return null;
+                    }
+
+                    const browserLang = navigator.language || navigator.userLanguage || '';
+                    const savedLang = localStorage.getItem('preferredLanguage') || getCookie('preferredLanguage');
+                    let isFarsi = false;
+
+                    if (savedLang === 'fa' || savedLang === 'fa-IR') {
+                        isFarsi = true;
+                    } else if (savedLang === 'zh' || savedLang === 'zh-CN') {
+                        isFarsi = false;
+                    } else {
+                        isFarsi = browserLang.includes('fa') || browserLang.includes('fa-IR');
+                    }
+
+                    const translations = {
+                        zh: {
+                            workerRegion: 'Worker地区: ',
+                            detectionMethod: '检测方式: ',
+                            proxyIPStatus: 'ProxyIP状态: ',
+                            currentIP: '当前使用IP: ',
+                            regionMatch: '地区匹配: ',
+                            regionNames: {
+                                'HK': '🇭🇰 香港', 'US': '🇺🇸 美国', 'SG': '🇸🇬 新加坡', 'JP': '🇯🇵 日本',
+                                'KR': '🇰🇷 韩国', 'DE': '🇩🇪 德国', 'SE': '🇸🇪 瑞典', 'NL': '🇳🇱 荷兰',
+                                'FI': '🇫🇮 芬兰', 'GB': '🇬🇧 英国', 'AU': '🇦🇺 澳洲', 'BR': '🇧🇷 巴西', 'CA': '🇨🇦 加拿大', 'FR': '🇫🇷 法国', 'CH': '🇨🇭 瑞士', 'RU': '🇷🇺 俄罗斯', 'IN': '🇮🇳 印度', 'TW': '🇹🇼 台湾'
+                            },
+                            customIPMode: '自定义ProxyIP模式 (p变量启用)',
+                            customIPModeDesc: '自定义IP模式 (已禁用地区匹配)',
+                            usingCustomProxyIP: '使用自定义ProxyIP: ',
+                            customIPConfig: ' (p变量配置)',
+                            customIPModeDisabled: '自定义IP模式，地区选择已禁用',
+                            manualRegion: '手动指定地区',
+                            manualRegionDesc: ' (手动指定)',
+                            proxyIPAvailable: '10/10 可用 (ProxyIP域名预设可用)',
+                            smartSelection: '智能就近选择中',
+                            sameRegionIP: '同地区IP可用 (1个)',
+                            cloudflareDetection: 'Cloudflare内置检测',
+                            detectionFailed: '检测失败',
+                            unknown: '未知'
+                        },
+                        fa: {
+                            workerRegion: 'منطقه Worker: ',
+                            detectionMethod: 'روش تشخیص: ',
+                            proxyIPStatus: 'وضعیت ProxyIP: ',
+                            currentIP: 'IP فعلی: ',
+                            regionMatch: 'تطبیق منطقه: ',
+                            regionNames: {
+                                'HK': '🇭🇰 هنگ کنگ', 'US': '🇺🇸 آمریکا', 'SG': '🇸🇬 سنگاپور', 'JP': '🇯🇵 ژاپن',
+                                'KR': '🇰🇷 کره جنوبی', 'DE': '🇩🇪 آلمان', 'SE': '🇸🇪 سوئد', 'NL': '🇳🇱 هلند',
+                                'FI': '🇫🇮 فنلاند', 'GB': '🇬🇧 بریتانیا', 'AU': '🇦🇺 استرالیا', 'BR': '🇧🇷 برزیل', 'CA': '🇨🇦 کانادا', 'FR': '🇫🇷 فرانسه', 'CH': '🇨🇭 سوئیس', 'RU': '🇷🇺 روسیه', 'IN': '🇮🇳 هند', 'TW': '🇹🇼 تایوان'
+                            },
+                            customIPMode: 'حالت ProxyIP سفارشی (متغیر p فعال است)',
+                            customIPModeDesc: 'حالت IP سفارشی (تطبیق منطقه غیرفعال است)',
+                            usingCustomProxyIP: 'استفاده از ProxyIP سفارشی: ',
+                            customIPConfig: ' (پیکربندی متغیر p)',
+                            customIPModeDisabled: 'حالت IP سفارشی، انتخاب منطقه غیرفعال است',
+                            manualRegion: 'تعیین منطقه دستی',
+                            manualRegionDesc: ' (تعیین دستی)',
+                            proxyIPAvailable: '10/10 در دسترس (دامنه پیش‌فرض ProxyIP در دسترس است)',
+                            smartSelection: 'انتخاب هوشمند نزدیک در حال انجام است',
+                            sameRegionIP: 'IP هم‌منطقه در دسترس است (1)',
+                            cloudflareDetection: 'تشخیص داخلی Cloudflare',
+                            detectionFailed: 'تشخیص ناموفق',
+                            unknown: 'ناشناخته'
+                        }
+                    };
+
+                    const t = translations[isFarsi ? 'fa' : 'zh'];
+
+                    let detectedRegion = 'US';
+                    let isCustomIPMode = false;
+                    let isManualRegionMode = false;
+                    try {
+                        const response = await fetch(window.location.pathname + '/region');
+                        const data = await response.json();
+
+                        if (data.region === 'CUSTOM') {
+                            isCustomIPMode = true;
+                            detectedRegion = 'CUSTOM';
+
+                            const customIPInfo = data.ci || t.unknown;
+                            geoInfo.innerHTML = t.detectionMethod + '<span style="color: #ffb400;">⚙️ ' + t.customIPMode + '</span>';
+                            regionStatus.innerHTML = t.workerRegion + '<span style="color: #ffb400;">🔧 ' + t.customIPModeDesc + '</span>';
+
+                            if (backupStatus) backupStatus.innerHTML = t.proxyIPStatus + '<span style="color: #ffb400;">🔧 ' + t.usingCustomProxyIP + customIPInfo + '</span>';
+                            if (currentIP) currentIP.innerHTML = t.currentIP + '<span style="color: #ffb400;">✅ ' + customIPInfo + t.customIPConfig + '</span>';
+                            if (regionMatch) regionMatch.innerHTML = t.regionMatch + '<span style="color: #ffb400;">⚠️ ' + t.customIPModeDisabled + '</span>';
+
+                            return;
+                        } else if (data.detectionMethod === '手动指定地区' || data.detectionMethod === 'تعیین منطقه دستی') {
+                            isManualRegionMode = true;
+                            detectedRegion = data.region;
+
+                            geoInfo.innerHTML = t.detectionMethod + '<span style="color: #00b380;">' + t.manualRegion + '</span>';
+                            regionStatus.innerHTML = t.workerRegion + '<span style="color: var(--ios-green);">🎯 ' + (t.regionNames[detectedRegion] || '未知地区') + t.manualRegionDesc + '</span>';
+
+                            if (backupStatus) backupStatus.innerHTML = t.proxyIPStatus + '<span style="color: var(--ios-green);">✅ ' + t.proxyIPAvailable + '</span>';
+                            if (currentIP) currentIP.innerHTML = t.currentIP + '<span style="color: var(--ios-green);">✅ ' + t.smartSelection + '</span>';
+                            if (regionMatch) regionMatch.innerHTML = t.regionMatch + '<span style="color: var(--ios-green);">✅ ' + t.sameRegionIP + '</span>';
+
+                            return;
+                        } else if (data.region && t.regionNames[data.region]) {
+                            detectedRegion = data.region;
+                        }
+                    } catch (e) {
+                        geoInfo.innerHTML = t.detectionMethod + '<span style="color: #ff3860;">' + t.detectionFailed + '</span>';
+                    }
+
+                    geoInfo.innerHTML = t.detectionMethod + '<span style="color: var(--ios-green);">' + t.cloudflareDetection + '</span>';
+                    regionStatus.innerHTML = t.workerRegion + '<span style="color: var(--ios-green);">✅ ' + (t.regionNames[detectedRegion] || '未知地区') + '</span>';
+
+                    if (backupStatus) {
+                        backupStatus.innerHTML = t.proxyIPStatus + '<span style="color: var(--ios-green);">✅ ' + t.proxyIPAvailable + '</span>';
+                    }
+
+                    if (currentIP) {
+                        currentIP.innerHTML = t.currentIP + '<span style="color: var(--ios-green);">✅ ' + t.smartSelection + '</span>';
+                    }
+
+                    if (regionMatch) {
+                        regionMatch.innerHTML = t.regionMatch + '<span style="color: var(--ios-green);">✅ ' + t.sameRegionIP + '</span>';
+                    }
+                } catch (error) {
+                    function getCookie(name) {
+                        const value = '; ' + document.cookie;
+                        const parts = value.split('; ' + name + '=');
+                        if (parts.length === 2) return parts.pop().split(';').shift();
+                        return null;
+                    }
+
+                    const browserLang = navigator.language || navigator.userLanguage || '';
+                    const savedLang = localStorage.getItem('preferredLanguage') || getCookie('preferredLanguage');
+                    let isFarsi = false;
+
+                    if (savedLang === 'fa' || savedLang === 'fa-IR') {
+                        isFarsi = true;
+                    } else {
+                        isFarsi = browserLang.includes('fa') || browserLang.includes('fa-IR');
+                    }
+
+                    const translations = {
+                        zh: {
+                            workerRegion: 'Worker地区: ',
+                            detectionMethod: '检测方式: ',
+                            proxyIPStatus: 'ProxyIP状态: ',
+                            currentIP: '当前使用IP: ',
+                            regionMatch: '地区匹配: ',
+                            detectionFailed: '检测失败'
+                        },
+                        fa: {
+                            workerRegion: 'منطقه Worker: ',
+                            detectionMethod: 'روش تشخیص: ',
+                            proxyIPStatus: 'وضعیت ProxyIP: ',
+                            currentIP: 'IP فعلی: ',
+                            regionMatch: 'تطبیق منطقه: ',
+                            detectionFailed: 'تشخیص ناموفق'
+                        }
+                    };
+
+                    const t = translations[isFarsi ? 'fa' : 'zh'];
+
+                    document.getElementById('regionStatus').innerHTML = t.workerRegion + '<span style="color: #ff3860;">❌ ' + t.detectionFailed + '</span>';
+                    document.getElementById('geoInfo').innerHTML = t.detectionMethod + '<span style="color: #ff3860;">❌ ' + t.detectionFailed + '</span>';
+                    document.getElementById('backupStatus').innerHTML = t.proxyIPStatus + '<span style="color: #ff3860;">❌ ' + t.detectionFailed + '</span>';
+                    document.getElementById('currentIP').innerHTML = t.currentIP + '<span style="color: #ff3860;">❌ ' + t.detectionFailed + '</span>';
+                    document.getElementById('regionMatch').innerHTML = t.regionMatch + '<span style="color: #ff3860;">❌ ' + t.detectionFailed + '</span>';
+                }
+            }
+
 async function checkKVStatus() {
                 const apiUrl = window.location.pathname + '/api/config';
                 try {
