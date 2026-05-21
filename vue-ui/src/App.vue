@@ -527,7 +527,7 @@ function selectClient(client) {
 
 function generateClientLink(client) {
   const currentUrl = window.location.href
-  subscriptionUrl.value = import.meta.env.getApiUrl('/sub')
+  subscriptionUrl.value = getApiUrl('/sub')
   
   // Try to open app or copy to clipboard
   const schemeUrl = getSchemeUrl(client)
@@ -601,7 +601,7 @@ function showToast(message, type = '') {
 
 async function checkSystemStatus() {
   try {
-    const response = await fetch(import.meta.env.getApiUrl('/region'))
+    const response = await fetch(getApiUrl('/region'))
     const data = await response.json()
     
     if (data.region === 'CUSTOM') {
@@ -619,7 +619,7 @@ async function checkSystemStatus() {
 
 async function checkKVStatus() {
   try {
-    const response = await fetch(import.meta.env.getApiUrl('/api/config'))
+    const response = await fetch(getApiUrl('/api/config'))
     
     if (response.status === 503) {
       kvStatus.value = t('kvNotEnabled')
@@ -643,7 +643,7 @@ async function checkKVStatus() {
 
 async function checkECHStatus() {
   try {
-    const subUrl = import.meta.env.getApiUrl('/sub')
+    const subUrl = getApiUrl('/sub')
     const response = await fetch(subUrl, {
       method: 'GET',
       headers: { 'Accept': 'text/plain' }
@@ -665,7 +665,7 @@ async function checkECHStatus() {
 
 async function loadConfig() {
   try {
-    const response = await fetch(import.meta.env.getApiUrl('/api/config'))
+    const response = await fetch(getApiUrl('/api/config'))
     if (!response.ok) return
     
     const data = await response.json()
@@ -689,7 +689,7 @@ async function saveConfig() {
   }
 
   try {
-    const response = await fetch(import.meta.env.getApiUrl('/api/config'), {
+    const response = await fetch(getApiUrl('/api/config'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config)
@@ -714,7 +714,7 @@ async function resetConfig() {
   }
 
   try {
-    const response = await fetch(import.meta.env.getApiUrl('/api/config'), {
+    const response = await fetch(getApiUrl('/api/config'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
