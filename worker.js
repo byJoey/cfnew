@@ -3631,17 +3631,21 @@ body {
 .container {
   max-width: 680px !important;
   margin: 0 auto !important;
-  padding: env(safe-area-inset-top) 16px 100px 16px !important;
+  padding: 20px 16px 120px 16px !important;
   background: var(--ios-bg) !important;
   min-height: 100vh !important;
-  box-sizing: border-box;
+  box-sizing: border-box !important;
 }
 
 /* Header */
 .header {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
   text-align: center !important;
-  padding: 24px 16px !important;
-  margin-bottom: 16px !important;
+  padding: 0 0 16px 0 !important;
+  margin-bottom: 8px !important;
+  gap: 6px !important;
 }
 
 /* Title */
@@ -3650,10 +3654,12 @@ body {
   font-size: 28px !important;
   font-weight: 700 !important;
   color: var(--ios-text) !important;
-  margin-top: 20px !important;
-  margin-bottom: 6px !important;
+  margin: 0 !important;
+  padding: 0 !important;
   letter-spacing: -0.5px !important;
   line-height: 1.2 !important;
+  width: 100% !important;
+  text-align: center !important;
 }
 
 /* Subtitle */
@@ -3661,8 +3667,11 @@ body {
   display: block !important;
   font-size: 15px !important;
   color: var(--ios-text-secondary) !important;
-  margin-top: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
   line-height: 1.4 !important;
+  width: 100% !important;
+  text-align: center !important;
 }
 
 /* Card */
@@ -3833,12 +3842,16 @@ hr {
   bottom: 0 !important;
   left: 0 !important;
   right: 0 !important;
-  background: var(--ios-bg) !important;
+  background: rgba(242, 242, 247, 0.95) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
   border-top: 1px solid var(--ios-separator) !important;
   padding: 12px 16px !important;
   padding-bottom: calc(12px + env(safe-area-inset-bottom)) !important;
   display: flex !important;
+  flex-direction: row !important;
   align-items: center !important;
+  justify-content: space-between !important;
   gap: 8px !important;
   z-index: 1000 !important;
   box-sizing: border-box !important;
@@ -3846,18 +3859,20 @@ hr {
 
 /* Action Buttons */
 .cp-copy-btn, .cp-action-btn, .cp-btn, .cp-fab-save, button[onclick*="save"], button[onclick*="reset"] {
-  padding: 10px 18px !important;
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  padding: 10px 16px !important;
   border-radius: 10px !important;
   font-size: 14px !important;
   font-weight: 500 !important;
   cursor: pointer !important;
   transition: all 0.2s ease !important;
   font-family: var(--ios-font) !important;
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  gap: 6px !important;
   border: none !important;
+  white-space: nowrap !important;
 }
 
 /* Save All Button */
@@ -3866,6 +3881,7 @@ hr {
   color: white !important;
   flex: 1 !important;
   font-weight: 600 !important;
+  min-height: 44px !important;
   box-shadow: 0 2px 8px rgba(0,122,255,0.3) !important;
 }
 
@@ -3876,6 +3892,7 @@ hr {
 
 .cp-fab-icon {
   font-size: 14px !important;
+  flex-shrink: 0 !important;
 }
 
 /* Refresh Button */
@@ -3883,6 +3900,7 @@ hr {
   background: var(--ios-card-bg) !important;
   color: var(--ios-text) !important;
   border: 1px solid var(--ios-separator) !important;
+  flex-shrink: 0 !important;
 }
 
 .cp-action-btn:active {
@@ -3895,6 +3913,7 @@ hr {
   background: var(--ios-card-bg) !important;
   color: var(--ios-red) !important;
   border: 1px solid rgba(255,59,48,0.3) !important;
+  flex-shrink: 0 !important;
 }
 
 .cp-action-btn-danger:active {
@@ -3903,6 +3922,7 @@ hr {
 
 .cp-btn-label {
   font-size: 13px !important;
+  white-space: nowrap !important;
 }
 
 /* Matrix rain - remove for iOS look */
@@ -3924,20 +3944,6 @@ hr {
         </style>
     </head>
     <body>
-        <div class="matrix-bg"></div>
-        <div class="matrix-code-rain" id="matrixCodeRain"></div>
-            <div class="cp-hud">
-                <span class="cp-hud-line"><span class="cp-hud-label">SYS::</span> ${t.terminal}</span>
-                <span class="cp-hud-line"><span class="cp-hud-label">NODE::</span> NIGHT_CITY</span>
-                <span class="cp-hud-line"><span class="cp-hud-label">LINK::</span> SECURE / ENC</span>
-            </div>
-            <div class="cp-lang-wrapper">
-                <span class="cp-lang-tag">LANG_</span>
-                <select id="languageSelector" onchange="changeLanguage(this.value)">
-                    <option value="zh" ${!isFarsi ? 'selected' : ''}>🇨🇳 中文</option>
-                    <option value="fa" ${isFarsi ? 'selected' : ''}>🇮🇷 فارسی</option>
-                </select>
-            </div>
         <div class="container">
             <div class="header">
                     <h1 class="title cp-glitch" data-text="${t.title}">${t.title}</h1>
@@ -4290,12 +4296,10 @@ hr {
                 </div>
             </div>
         </div>
-        <div id="cpToastStack" class="cp-toast-stack" aria-live="polite" aria-atomic="false"></div>
-        <div id="cpActionStatus" class="cp-action-status" role="status" aria-live="polite"></div>
         <div id="cpActionBar" class="cp-action-bar" role="toolbar" aria-label="${t.configManagement}">
             <button type="button" id="cpBtnSaveAll" class="cp-fab-save" title="${isFarsi ? 'ذخیره همه تنظیمات' : '保存所有配置 (Ctrl+S)'}">
                 <span class="cp-fab-icon">▣</span>
-                <span>${isFarsi ? 'ذخیره همه' : '保 存 全 部'}</span>
+                <span>${isFarsi ? 'ذخیره همه' : '保存全部'}</span>
                 <span class="cp-fab-dot" aria-hidden="true"></span>
             </button>
             <button type="button" id="cpBtnRefresh" class="cp-action-btn" data-tip="${t.refreshConfig}" aria-label="${t.refreshConfig}">
@@ -4771,7 +4775,7 @@ hr {
                             detectedRegion = data.region;
 
                             geoInfo.innerHTML = t.detectionMethod + '<span style="color: #00b380;">' + t.manualRegion + '</span>';
-                            regionStatus.innerHTML = t.workerRegion + '<span style="color: var(--ios-green);">🎯 ' + t.regionNames[detectedRegion] + t.manualRegionDesc + '</span>';
+                            regionStatus.innerHTML = t.workerRegion + '<span style="color: var(--ios-green);">🎯 ' + (t.regionNames[detectedRegion] || '未知地区') + t.manualRegionDesc + '</span>';
 
                             // 显示配置状态而不是检测状态
                             if (backupStatus) backupStatus.innerHTML = t.proxyIPStatus + '<span style="color: var(--ios-green);">✅ ' + t.proxyIPAvailable + '</span>';
@@ -4789,7 +4793,7 @@ hr {
                         geoInfo.innerHTML = t.detectionMethod + '<span style="color: #ff3860;">' + t.detectionFailed + '</span>';
                     }
 
-                    regionStatus.innerHTML = t.workerRegion + '<span style="color: var(--ios-green);">✅ ' + t.regionNames[detectedRegion] + '</span>';
+                    regionStatus.innerHTML = t.workerRegion + '<span style="color: var(--ios-green);">✅ ' + (t.regionNames[detectedRegion] || '未知地区') + '</span>';
 
                     // 直接显示配置状态，不再进行检测
                     if (backupStatus) {
