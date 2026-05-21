@@ -3941,12 +3941,39 @@ hr {
   z-index: auto !important;
 }
 
+/* ULTIMATE GHOST KILLER - 属性选择器彻底抹除所有残留视觉元素 */
+[id*="toast"], [class*="toast"], [id*="loading"], [class*="loading"],
+[id*="notification"], [class*="notification"], [id*="alert"], [class*="alert"],
+[id*="hud"], [class*="hud"], [id*="matrix"], [class*="matrix"],
+[id*="action-status"], [class*="action-status"], [class*="cp-toast"] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  position: absolute !important;
+  left: -9999px !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* 强制约束 body 禁止产生任何伪元素视觉 */
+body::before, body::after {
+  display: none !important;
+  content: none !important;
+}
+
         </style>
     </head>
     <body>
         <div class="container">
             <div class="header">
-                    <h1 class="title cp-glitch" data-text="${t.title}">${t.title}</h1>
+                    <h1 class="title" data-text="${t.title}">${t.title}</h1>
                     <p class="subtitle">${t.subtitle}</p>
             </div>
             <div class="card">
@@ -4031,7 +4058,7 @@ hr {
                                             <span style="font-size: 1.1rem;">${t.enableXhttp}</span>
                                     </label>
                                 </div>
-                                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(0, 240, 255, 0.3);">
+                                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--ios-separator);">
                                     <div style="margin-bottom: 10px;">
                                         <label >
                                             <input type="checkbox" id="ech" style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
@@ -4050,7 +4077,7 @@ hr {
                                         <small style="color: #7aa9c4; font-size: 0.8rem; display: block; margin-top: 5px;">${t.customECHDomainHint}</small>
                                     </div>
                                 </div>
-                                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(0, 240, 255, 0.3);">
+                                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--ios-separator);">
                                         <label class="form-label">${t.trojanPassword}</label>
                                         <input type="text" id="tp" placeholder="${t.trojanPasswordPlaceholder}" class="ios-input">
                                         <small style="color: #7aa9c4; font-size: 0.8rem; display: block; margin-top: 5px;">${t.trojanPasswordHint}</small>
@@ -4388,56 +4415,10 @@ hr {
                 }
             });
 
-            // 赛博朋克风 toast 通知 (替代 alert)
+            // cpToast removed - cpToastStack container deleted from DOM
             window.cpToast = function(message, type, options) {
-                options = options || {};
-                var stack = document.getElementById('cpToastStack');
-                if (!stack) return;
-                var typeMap = { success: '✓', info: '⌬', warn: '⚠', error: '✕' };
-                var titleMap = { success: 'SUCCESS', info: 'INFO', warn: 'WARN', error: 'ERROR' };
-                type = typeMap[type] ? type : 'success';
-                var duration = options.duration || 3200;
-                var toast = document.createElement('div');
-                toast.className = 'cp-toast cp-toast-' + type;
-                toast.style.setProperty('--cp-toast-dur', duration + 'ms');
-                var icon = document.createElement('span');
-                icon.className = 'cp-toast-icon';
-                icon.textContent = typeMap[type];
-                var body = document.createElement('div');
-                body.className = 'cp-toast-body';
-                var title = document.createElement('div');
-                title.className = 'cp-toast-title';
-                title.textContent = options.title || titleMap[type];
-                var msg = document.createElement('div');
-                msg.className = 'cp-toast-msg';
-                msg.textContent = String(message == null ? '' : message);
-                body.appendChild(title);
-                body.appendChild(msg);
-                var close = document.createElement('button');
-                close.type = 'button';
-                close.className = 'cp-toast-close';
-                close.setAttribute('aria-label', 'close');
-                close.textContent = '✕';
-                toast.appendChild(icon);
-                toast.appendChild(body);
-                toast.appendChild(close);
-                stack.appendChild(toast);
-                requestAnimationFrame(function() { toast.classList.add('cp-show'); });
-                var dismissed = false;
-                function dismiss() {
-                    if (dismissed) return;
-                    dismissed = true;
-                    toast.classList.remove('cp-show');
-                    toast.classList.add('cp-hide');
-                    setTimeout(function() {
-                        if (toast.parentNode) toast.parentNode.removeChild(toast);
-                    }, 400);
-                }
-                close.addEventListener('click', dismiss);
-                var timer = setTimeout(dismiss, duration);
-                toast.addEventListener('mouseenter', function() { clearTimeout(timer); });
-                toast.addEventListener('mouseleave', function() { timer = setTimeout(dismiss, 1200); });
-                return { dismiss: dismiss, element: toast };
+                // Toast system disabled - no container element exists
+                return { dismiss: function(){}, element: null };
             };
 
             function tryOpenApp(schemeUrl, fallbackCallback, timeout) {
@@ -4614,322 +4595,10 @@ hr {
                 }
             }
 
-            function createMatrixRain() {
-                const matrixContainer = document.getElementById('matrixCodeRain');
-                if (!matrixContainer) return;
-                const cyberChars = '01アイウエオカキクケコサシスセソタチツテトナニヌネノ$%#@!?<>+=ABCDEF';
-                const palette = ['#00f0ff', '#ff2bd6', '#a347ff', '#00ff9d'];
-                const columns = Math.floor(window.innerWidth / 20);
-
-                for (let i = 0; i < columns; i++) {
-                    const column = document.createElement('div');
-                    column.className = 'matrix-column';
-                    column.style.left = (i * 20) + 'px';
-                    column.style.animationDelay = (-Math.random() * 15) + 's';
-                    column.style.animationDuration = (Math.random() * 14 + 8) + 's';
-                    column.style.fontSize = (Math.random() * 4 + 12) + 'px';
-                    column.style.opacity = (Math.random() * 0.7 + 0.3).toFixed(2);
-
-                    let text = '';
-                    const charCount = Math.floor(Math.random() * 30 + 18);
-                    for (let j = 0; j < charCount; j++) {
-                        const char = cyberChars[Math.floor(Math.random() * cyberChars.length)];
-                        const useAccent = Math.random() > 0.85;
-                        const color = useAccent ? palette[Math.floor(Math.random() * palette.length)] : '';
-                        text += color
-                            ? ('<span style="color: var(--ios-blue);">' + char + '</span><br>')
-                            : ('<span>' + char + '</span><br>');
-                    }
-                    column.innerHTML = text;
-                    matrixContainer.appendChild(column);
-                }
-
-                setInterval(function() {
-                    const cols = matrixContainer.querySelectorAll('.matrix-column');
-                    cols.forEach(function(column) {
-                        if (Math.random() > 0.94) {
-                            const chars = column.querySelectorAll('span');
-                            if (chars.length > 0) {
-                                const target = chars[Math.floor(Math.random() * chars.length)];
-                                const prev = target.style.color;
-                                target.style.color = '#ffffff';
-                                target.style.textShadow = 'none';
-                                setTimeout(function() {
-                                    target.style.color = prev;
-                                    target.style.textShadow = '';
-                                }, 200);
-                            }
-                        }
-                    });
-                }, 110);
+                        function createMatrixRain() {
+                // Matrix rain removed for iOS flat style - element deleted from DOM
             }
-
-            async function checkSystemStatus() {
-                try {
-                    const cfStatus = document.getElementById('cfStatus');
-                    const regionStatus = document.getElementById('regionStatus');
-                    const geoInfo = document.getElementById('geoInfo');
-                    const backupStatus = document.getElementById('backupStatus');
-                    const currentIP = document.getElementById('currentIP');
-                    const regionMatch = document.getElementById('regionMatch');
-
-                    // 获取当前语言设置（优先从Cookie/localStorage读取）
-                    function getCookie(name) {
-                        const value = '; ' + document.cookie;
-                        const parts = value.split('; ' + name + '=');
-                        if (parts.length === 2) return parts.pop().split(';').shift();
-                        return null;
-                    }
-
-                    const browserLang = navigator.language || navigator.userLanguage || '';
-                    const savedLang = localStorage.getItem('preferredLanguage') || getCookie('preferredLanguage');
-                    let isFarsi = false;
-
-                    if (savedLang === 'fa' || savedLang === 'fa-IR') {
-                        isFarsi = true;
-                    } else if (savedLang === 'zh' || savedLang === 'zh-CN') {
-                        isFarsi = false;
-                    } else {
-                        isFarsi = browserLang.includes('fa') || browserLang.includes('fa-IR');
-                    }
-
-                    const translations = {
-                        zh: {
-                            workerRegion: 'Worker地区: ',
-                            detectionMethod: '检测方式: ',
-                            proxyIPStatus: 'ProxyIP状态: ',
-                            currentIP: '当前使用IP: ',
-                            regionMatch: '地区匹配: ',
-                            regionNames: {
-                                'HK': '🇭🇰 香港', 'US': '🇺🇸 美国', 'SG': '🇸🇬 新加坡', 'JP': '🇯🇵 日本',
-                                'KR': '🇰🇷 韩国', 'DE': '🇩🇪 德国', 'SE': '🇸🇪 瑞典', 'NL': '🇳🇱 荷兰',
-                                'FI': '🇫🇮 芬兰', 'GB': '🇬🇧 英国'
-                            },
-                            customIPMode: '自定义ProxyIP模式 (p变量启用)',
-                            customIPModeDesc: '自定义IP模式 (已禁用地区匹配)',
-                            usingCustomProxyIP: '使用自定义ProxyIP: ',
-                            customIPConfig: ' (p变量配置)',
-                            customIPModeDisabled: '自定义IP模式，地区选择已禁用',
-                            manualRegion: '手动指定地区',
-                            manualRegionDesc: ' (手动指定)',
-                            proxyIPAvailable: '10/10 可用 (ProxyIP域名预设可用)',
-                            smartSelection: '智能就近选择中',
-                            sameRegionIP: '同地区IP可用 (1个)',
-                            cloudflareDetection: 'Cloudflare内置检测',
-                            detectionFailed: '检测失败',
-                            unknown: '未知'
-                        },
-                        fa: {
-                            workerRegion: 'منطقه Worker: ',
-                            detectionMethod: 'روش تشخیص: ',
-                            proxyIPStatus: 'وضعیت ProxyIP: ',
-                            currentIP: 'IP فعلی: ',
-                            regionMatch: 'تطبیق منطقه: ',
-                            regionNames: {
-                                'HK': '🇭🇰 هنگ کنگ', 'US': '🇺🇸 آمریکا', 'SG': '🇸🇬 سنگاپور', 'JP': '🇯🇵 ژاپن',
-                                'KR': '🇰🇷 کره جنوبی', 'DE': '🇩🇪 آلمان', 'SE': '🇸🇪 سوئد', 'NL': '🇳🇱 هلند',
-                                'FI': '🇫🇮 فنلاند', 'GB': '🇬🇧 بریتانیا'
-                            },
-                            customIPMode: 'حالت ProxyIP سفارشی (متغیر p فعال است)',
-                            customIPModeDesc: 'حالت IP سفارشی (تطبیق منطقه غیرفعال است)',
-                            usingCustomProxyIP: 'استفاده از ProxyIP سفارشی: ',
-                            customIPConfig: ' (پیکربندی متغیر p)',
-                            customIPModeDisabled: 'حالت IP سفارشی، انتخاب منطقه غیرفعال است',
-                            manualRegion: 'تعیین منطقه دستی',
-                            manualRegionDesc: ' (تعیین دستی)',
-                            proxyIPAvailable: '10/10 در دسترس (دامنه پیش‌فرض ProxyIP در دسترس است)',
-                            smartSelection: 'انتخاب هوشمند نزدیک در حال انجام است',
-                            sameRegionIP: 'IP هم‌منطقه در دسترس است (1)',
-                            cloudflareDetection: 'تشخیص داخلی Cloudflare',
-                            detectionFailed: 'تشخیص ناموفق',
-                            unknown: 'ناشناخته'
-                        }
-                    };
-
-                    const t = translations[isFarsi ? 'fa' : 'zh'];
-
-                    let detectedRegion = 'US'; // 默认值
-                    let isCustomIPMode = false;
-                    let isManualRegionMode = false;
-                    try {
-                        const response = await fetch(window.location.pathname + '/region');
-                        const data = await response.json();
-
-                        if (data.region === 'CUSTOM') {
-                            isCustomIPMode = true;
-                            detectedRegion = 'CUSTOM';
-
-                            // 获取自定义IP的详细信息
-                            const customIPInfo = data.ci || t.unknown;
-                            geoInfo.innerHTML = t.detectionMethod + '<span style="color: #ffb400;">⚙️ ' + t.customIPMode + '</span>';
-                            regionStatus.innerHTML = t.workerRegion + '<span style="color: #ffb400;">🔧 ' + t.customIPModeDesc + '</span>';
-
-                            // 显示自定义IP配置状态，包含具体IP
-                            if (backupStatus) backupStatus.innerHTML = t.proxyIPStatus + '<span style="color: #ffb400;">🔧 ' + t.usingCustomProxyIP + customIPInfo + '</span>';
-                            if (currentIP) currentIP.innerHTML = t.currentIP + '<span style="color: #ffb400;">✅ ' + customIPInfo + t.customIPConfig + '</span>';
-                            if (regionMatch) regionMatch.innerHTML = t.regionMatch + '<span style="color: #ffb400;">⚠️ ' + t.customIPModeDisabled + '</span>';
-
-                            return; // 提前返回，不执行后续的地区匹配逻辑
-                        } else if (data.detectionMethod === '手动指定地区' || data.detectionMethod === 'تعیین منطقه دستی') {
-                            isManualRegionMode = true;
-                            detectedRegion = data.region;
-
-                            geoInfo.innerHTML = t.detectionMethod + '<span style="color: #00b380;">' + t.manualRegion + '</span>';
-                            regionStatus.innerHTML = t.workerRegion + '<span style="color: var(--ios-green);">🎯 ' + (t.regionNames[detectedRegion] || '未知地区') + t.manualRegionDesc + '</span>';
-
-                            // 显示配置状态而不是检测状态
-                            if (backupStatus) backupStatus.innerHTML = t.proxyIPStatus + '<span style="color: var(--ios-green);">✅ ' + t.proxyIPAvailable + '</span>';
-                            if (currentIP) currentIP.innerHTML = t.currentIP + '<span style="color: var(--ios-green);">✅ ' + t.smartSelection + '</span>';
-                            if (regionMatch) regionMatch.innerHTML = t.regionMatch + '<span style="color: var(--ios-green);">✅ ' + t.sameRegionIP + '</span>';
-
-                            return; // 提前返回，不执行后续的地区匹配逻辑
-                        } else if (data.region && t.regionNames[data.region]) {
-                            detectedRegion = data.region;
-                    }
-
-                    geoInfo.innerHTML = t.detectionMethod + '<span style="color: var(--ios-green);">' + t.cloudflareDetection + '</span>';
-
-                    } catch (e) {
-                        geoInfo.innerHTML = t.detectionMethod + '<span style="color: #ff3860;">' + t.detectionFailed + '</span>';
-                    }
-
-                    regionStatus.innerHTML = t.workerRegion + '<span style="color: var(--ios-green);">✅ ' + (t.regionNames[detectedRegion] || '未知地区') + '</span>';
-
-                    // 直接显示配置状态，不再进行检测
-                    if (backupStatus) {
-                        backupStatus.innerHTML = t.proxyIPStatus + '<span style="color: var(--ios-green);">✅ ' + t.proxyIPAvailable + '</span>';
-                    }
-
-                    if (currentIP) {
-                        currentIP.innerHTML = t.currentIP + '<span style="color: var(--ios-green);">✅ ' + t.smartSelection + '</span>';
-                    }
-
-                    if (regionMatch) {
-                        regionMatch.innerHTML = t.regionMatch + '<span style="color: var(--ios-green);">✅ ' + t.sameRegionIP + '</span>';
-                    }
-                } catch (error) {
-                    function getCookie(name) {
-                        const value = '; ' + document.cookie;
-                        const parts = value.split('; ' + name + '=');
-                        if (parts.length === 2) return parts.pop().split(';').shift();
-                        return null;
-                    }
-
-                    const browserLang = navigator.language || navigator.userLanguage || '';
-                    const savedLang = localStorage.getItem('preferredLanguage') || getCookie('preferredLanguage');
-                    let isFarsi = false;
-
-                    if (savedLang === 'fa' || savedLang === 'fa-IR') {
-                        isFarsi = true;
-                    } else {
-                        isFarsi = browserLang.includes('fa') || browserLang.includes('fa-IR');
-                    }
-
-                    const translations = {
-                        zh: {
-                            workerRegion: 'Worker地区: ',
-                            detectionMethod: '检测方式: ',
-                            proxyIPStatus: 'ProxyIP状态: ',
-                            currentIP: '当前使用IP: ',
-                            regionMatch: '地区匹配: ',
-                            detectionFailed: '检测失败'
-                        },
-                        fa: {
-                            workerRegion: 'منطقه Worker: ',
-                            detectionMethod: 'روش تشخیص: ',
-                            proxyIPStatus: 'وضعیت ProxyIP: ',
-                            currentIP: 'IP فعلی: ',
-                            regionMatch: 'تطبیق منطقه: ',
-                            detectionFailed: 'تشخیص ناموفق'
-                        }
-                    };
-
-                    const t = translations[isFarsi ? 'fa' : 'zh'];
-
-                    document.getElementById('regionStatus').innerHTML = t.workerRegion + '<span style="color: #ff3860;">❌ ' + t.detectionFailed + '</span>';
-                    document.getElementById('geoInfo').innerHTML = t.detectionMethod + '<span style="color: #ff3860;">❌ ' + t.detectionFailed + '</span>';
-                    document.getElementById('backupStatus').innerHTML = t.proxyIPStatus + '<span style="color: #ff3860;">❌ ' + t.detectionFailed + '</span>';
-                    document.getElementById('currentIP').innerHTML = t.currentIP + '<span style="color: #ff3860;">❌ ' + t.detectionFailed + '</span>';
-                    document.getElementById('regionMatch').innerHTML = t.regionMatch + '<span style="color: #ff3860;">❌ ' + t.detectionFailed + '</span>';
-                }
-            }
-
-            async function testAPI() {
-                try {
-                    function getCookie(name) {
-                        const value = '; ' + document.cookie;
-                        const parts = value.split('; ' + name + '=');
-                        if (parts.length === 2) return parts.pop().split(';').shift();
-                        return null;
-                    }
-
-                    const browserLang = navigator.language || navigator.userLanguage || '';
-                    const savedLang = localStorage.getItem('preferredLanguage') || getCookie('preferredLanguage');
-                    let isFarsi = false;
-
-                    if (savedLang === 'fa' || savedLang === 'fa-IR') {
-                        isFarsi = true;
-                    } else {
-                        isFarsi = browserLang.includes('fa') || browserLang.includes('fa-IR');
-                    }
-
-                    const translations = {
-                        zh: {
-                            apiTestResult: 'API检测结果: ',
-                            apiTestTime: '检测时间: ',
-                            apiTestFailed: 'API检测失败: ',
-                            unknownError: '未知错误',
-                            apiTestError: 'API测试失败: '
-                        },
-                        fa: {
-                            apiTestResult: 'نتیجه تشخیص API: ',
-                            apiTestTime: 'زمان تشخیص: ',
-                            apiTestFailed: 'تشخیص API ناموفق: ',
-                            unknownError: 'خطای ناشناخته',
-                            apiTestError: 'تست API ناموفق: '
-                        }
-                    };
-
-                    const t = translations[isFarsi ? 'fa' : 'zh'];
-
-                    const response = await fetch(window.location.pathname + '/test-api');
-                    const data = await response.json();
-
-                    if (data.detectedRegion) {
-                        cpToast(t.apiTestResult + data.detectedRegion + '\\n' + t.apiTestTime + data.timestamp, 'info', { duration: 5000 });
-                    } else {
-                        cpToast(t.apiTestFailed + (data.error || t.unknownError), 'error', { duration: 4500 });
-                    }
-                } catch (error) {
-                    function getCookie(name) {
-                        const value = '; ' + document.cookie;
-                        const parts = value.split('; ' + name + '=');
-                        if (parts.length === 2) return parts.pop().split(';').shift();
-                        return null;
-                    }
-
-                    const browserLang = navigator.language || navigator.userLanguage || '';
-                    const savedLang = localStorage.getItem('preferredLanguage') || getCookie('preferredLanguage');
-                    let isFarsi = false;
-
-                    if (savedLang === 'fa' || savedLang === 'fa-IR') {
-                        isFarsi = true;
-                    } else {
-                        isFarsi = browserLang.includes('fa') || browserLang.includes('fa-IR');
-                    }
-
-                    const translations = {
-                        zh: { apiTestError: 'API测试失败: ' },
-                        fa: { apiTestError: 'تست API ناموفق: ' }
-                    };
-
-                    const t = translations[isFarsi ? 'fa' : 'zh'];
-                    cpToast(t.apiTestError + error.message, 'error', { duration: 4500 });
-                }
-            }
-            
-            // 配置管理相关函数
-            async function checkKVStatus() {
+async function checkKVStatus() {
                 const apiUrl = window.location.pathname + '/api/config';
                 try {
                     const response = await fetch(apiUrl);
@@ -5333,7 +5002,7 @@ hr {
             }
 
             document.addEventListener('DOMContentLoaded', function() {
-                createMatrixRain();
+                // createMatrixRain removed for iOS style
                 checkSystemStatus();
                 checkKVStatus();
                 checkECHStatus();
@@ -5426,17 +5095,14 @@ hr {
                 }
                 window.saveAllConfig = saveAllConfig;
 
+                // flashActionStatus removed - cpActionStatus element deleted from DOM
                 function flashActionStatus(msg, type) {
-                    const el = document.getElementById('cpActionStatus');
-                    if (!el) return;
-                    el.textContent = msg;
-                    el.classList.toggle('cp-err', type === 'err');
-                    el.classList.add('cp-show');
-                    clearTimeout(flashActionStatus._t);
-                    flashActionStatus._t = setTimeout(function() {
-                        el.classList.remove('cp-show');
-                    }, 2400);
+                    // Status display disabled - no element exists
                 }
+
+                async function resetAllConfig() {
+                }
+
                 window.flashActionStatus = flashActionStatus;
 
                 // 绑定底部统一操作条
