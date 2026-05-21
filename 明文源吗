@@ -54,7 +54,15 @@
         'Oracle': ['甲骨文', 'Oracle'],
         'DigitalOcean': ['数码海', 'DigitalOcean'],
         'Vultr': ['Vultr', 'Vultr'],
-        'Multacom': ['Multacom', 'Multacom']
+        'Multacom': ['Multacom', 'Multacom'],
+        'AU': ['🇦🇺 澳洲', 'AU', 'Australia'],
+        'BR': ['🇧🇷 巴西', 'BR', 'Brazil'],
+        'CA': ['🇨🇦 加拿大', 'CA', 'Canada'],
+        'FR': ['🇫🇷 法国', 'FR', 'France'],
+        'CH': ['🇨🇭 瑞士', 'CH', 'Switzerland'],
+        'RU': ['🇷🇺 俄罗斯', 'RU', 'Russia'],
+        'IN': ['🇮🇳 印度', 'IN', 'India'],
+        'TW': ['🇹🇼 台湾', 'TW', 'Taiwan']
     };
 
     let backupIPs = [
@@ -68,6 +76,14 @@
         { domain: 'ProxyIP.NL.CMLiussss.net', region: 'NL', regionCode: 'NL', port: 443 },
         { domain: 'ProxyIP.FI.CMLiussss.net', region: 'FI', regionCode: 'FI', port: 443 },
         { domain: 'ProxyIP.GB.CMLiussss.net', region: 'GB', regionCode: 'GB', port: 443 },
+        { domain: 'ProxyIP.AU.CMLiussss.net', region: 'AU', regionCode: 'AU', port: 443 },
+        { domain: 'ProxyIP.BR.CMLiussss.net', region: 'BR', regionCode: 'BR', port: 443 },
+        { domain: 'ProxyIP.CA.CMLiussss.net', region: 'CA', regionCode: 'CA', port: 443 },
+        { domain: 'ProxyIP.FR.CMLiussss.net', region: 'FR', regionCode: 'FR', port: 443 },
+        { domain: 'ProxyIP.CH.CMLiussss.net', region: 'CH', regionCode: 'CH', port: 443 },
+        { domain: 'ProxyIP.RU.CMLiussss.net', region: 'RU', regionCode: 'RU', port: 443 },
+        { domain: 'ProxyIP.IN.CMLiussss.net', region: 'IN', regionCode: 'IN', port: 443 },
+        { domain: 'ProxyIP.TW.CMLiussss.net', region: 'TW', regionCode: 'TW', port: 443 },
         { domain: 'ProxyIP.Oracle.cmliussss.net', region: 'Oracle', regionCode: 'Oracle', port: 443 },
         { domain: 'ProxyIP.DigitalOcean.CMLiussss.net', region: 'DigitalOcean', regionCode: 'DigitalOcean', port: 443 },
         { domain: 'ProxyIP.Vultr.CMLiussss.net', region: 'Vultr', regionCode: 'Vultr', port: 443 },
@@ -278,7 +294,15 @@
             'SE': ['DE', 'NL', 'FI', 'GB'], 
             'NL': ['DE', 'GB', 'SE', 'FI'], 
             'FI': ['SE', 'DE', 'NL', 'GB'], 
-            'GB': ['DE', 'NL', 'SE', 'FI']  
+            'GB': ['DE', 'NL', 'SE', 'FI'],
+            'AU': ['SG', 'JP', 'IN'],
+            'BR': ['US', 'CA', 'AU'],
+            'CA': ['US', 'BR', 'AU'],
+            'FR': ['DE', 'NL', 'GB', 'CH'],
+            'CH': ['FR', 'DE', 'NL', 'IT'],
+            'RU': ['FI', 'SE', 'DE', 'IN'],
+            'IN': ['SG', 'AU', 'TW'],
+            'TW': ['SG', 'JP', 'HK', 'IN']
         };
 
         return nearbyMap[region] || [];
@@ -286,7 +310,7 @@
 
     function getAllRegionsByPriority(region) {
         const nearbyRegions = getNearbyRegions(region);
-        const allRegions = ['US', 'SG', 'JP', 'KR', 'DE', 'SE', 'NL', 'FI', 'GB'];
+        const allRegions = ['US', 'SG', 'JP', 'KR', 'DE', 'SE', 'NL', 'FI', 'GB', 'AU', 'BR', 'CA', 'FR', 'CH', 'RU', 'IN', 'TW'];
 
         return [region, ...nearbyRegions, ...allRegions.filter(r => r !== region && !nearbyRegions.includes(r))];
     }
