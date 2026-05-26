@@ -1,5 +1,5 @@
-    // CFnew - 终端 v2.9.6
-    // 版本: v2.9.6 
+    // CFnew - 终端 v2.9.8
+    // 版本: v2.9.8 
     import { connect } from 'cloudflare:sockets';
     let at = '351c9981-04b6-4103-aa4b-864aa9c91469';
     let fallbackAddress = '';
@@ -25,20 +25,22 @@
     let customDNS = 'https://223.5.5.5/dns-query';
     // 自定义ECH域名（默认：cloudflare-ech.com）
     let customECHDomain = 'cloudflare-ech.com';
+    let customALPN = '';
 
     let scu = 'https://url.v1.mk/sub';  
     // 远程配置URL（硬编码）
     const remoteConfigUrl = 'https://raw.githubusercontent.com/byJoey/test/refs/heads/main/tist.ini';
 
-    let epd = false;   // 优选域名默认关闭
+    let epd = true;   // 优选域名默认关闭
     let epi = true;       
-    let egi = false;
+    let egi = true;
     let ena = false;   // 原生地址默认关闭          
 
     let kvStore = null;
     let kvConfig = {};
     let kvConfigLastLoad = 0;
-    const KV_CACHE_TTL = 5 * 60 * 60 * 1000; // 5小时缓存
+    const KV_CACHE_TTL = 30 * 1000; // 30秒缓存（短窗口内跳过版本检查）
+    let kvConfigVersion = '';
 
     const regionMapping = {
         'HK': ['🇭🇰 香港', 'HK', 'Hong Kong'],
@@ -103,6 +105,16 @@
     const ADDRESS_TYPE_IPV4 = 1;
     const ADDRESS_TYPE_URL = 2;
     const ADDRESS_TYPE_IPV6 = 3;
+    const TRANSPORT_CHUNK_SIZE = 64 * 1024;
+    const TRANSPORT_DN_PACK = 32 * 1024;
+    const TRANSPORT_DN_TAIL = 512;
+    const TRANSPORT_DN_DELAY = 0;
+    const TRANSPORT_UP_PACK = 16 * 1024;
+    const TRANSPORT_UP_Q_MAX = 256 * 1024;
+    const TRANSPORT_CONNECT_RACE = 2;
+    const FIRST_BYTE_TIMEOUT = 3500;
+    const sharedDecoder = new TextDecoder();
+    const uuidByteCache = new Map();
 
 	function isValidFormat(str) {
         const userRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -147,6 +159,52 @@
         return { namer, setSkipNumbering };
     }
 
+    function normalizeNodeHost(host) {
+        return String(host || '').trim().replace(/^\[([^\]]+)\]$/, '$1');
+    }
+
+    function compactNodeAliasPart(value, fallback = 'Node') {
+        let text = String(value || '').trim();
+        if (!text || /^自定义优选-/i.test(text)) text = fallback;
+        text = text
+            .replace(/^\[([^\]]+)\]$/, '$1')
+            .replace(/^https?:\/\//i, '')
+            .replace(/[/?#].*$/, '')
+            .replace(/\s+/g, '_');
+        return text || fallback;
+    }
+
+    function getCompactNodeAliasBase(item) {
+        const host = normalizeNodeHost(item?.ip || item?.domain || '');
+        if (host && host.includes(':') && /^[0-9a-fA-F:.]+$/.test(host)) return 'IPv6优选';
+        if (host && !isValidIP(host)) return '优选域名';
+
+        const isp = compactNodeAliasPart(item?.isp || item?.name || '', 'IPv4优选');
+        const colo = compactNodeAliasPart(item?.colo || '', '');
+        return colo ? `${isp}-${colo}` : isp;
+    }
+
+    function createCompactNodeNamer(skipNumbering = false) {
+        const counters = {};
+        return (item) => {
+            const base = getCompactNodeAliasBase(item);
+            if (skipNumbering) return base;
+            counters[base] = (counters[base] || 0) + 1;
+            return `${base}-${String(counters[base]).padStart(2, '0')}`;
+        };
+    }
+
+    function normalizeALPN(value) {
+        const allowed = ['', 'h3', 'h2', 'http/1.1', 'h3,h2', 'h2,http/1.1', 'h3,h2,http/1.1'];
+        const alpn = String(value || '').trim();
+        return allowed.includes(alpn) ? alpn : '';
+    }
+
+    function applyALPNParam(params) {
+        const alpn = normalizeALPN(customALPN);
+        if (alpn) params.set('alpn', alpn);
+    }
+
     async function initKVStore(env) {
         if (env.C) {
             try {
@@ -164,19 +222,31 @@
             return;
         }
 
+        // 短窗口内完全信任缓存，避免高频请求时打爆 KV
         if (!force && kvConfigLastLoad > 0 && (Date.now() - kvConfigLastLoad) < KV_CACHE_TTL) {
             return;
         }
 
         try {
+            // 读取小体积的版本键 c_ver（约 13B），用于跨 isolate 缓存失效
+            let ver = '';
+            try { ver = (await kvStore.get('c_ver')) || ''; } catch (_) {}
+
+            // 版本未变化且已有缓存，仅刷新时间戳，跳过完整读取
+            if (!force && ver && ver === kvConfigVersion && kvConfig && Object.keys(kvConfig).length > 0) {
+                kvConfigLastLoad = Date.now();
+                return;
+            }
+
             const configData = await kvStore.get('c');
             if (configData) {
                 kvConfig = JSON.parse(configData);
-            } else {
             }
+            kvConfigVersion = ver;
             kvConfigLastLoad = Date.now();
         } catch (error) {
-            kvConfig = {};
+            // 读取失败时保留现有缓存，避免临时故障导致配置丢失
+            if (!kvConfig) kvConfig = {};
         }
     }
 
@@ -188,6 +258,10 @@
         try {
             const configString = JSON.stringify(kvConfig);
             await kvStore.put('c', configString);
+            // 写入版本号，让其它 isolate 在下次请求时能立即看到变更
+            const newVer = String(Date.now());
+            kvConfigVersion = newVer;
+            try { await kvStore.put('c_ver', newVer); } catch (_) {}
             kvConfigLastLoad = Date.now();
         } catch (error) {
             throw error; 
@@ -505,6 +579,8 @@
                     customECHDomain = customECHDomainValue.trim();
                 }
 
+                customALPN = normalizeALPN(getConfigValue('alpn', env.alpn || env.ALPN || ''));
+
                 // 如果启用了ECH，自动启用仅TLS模式（避免80端口干扰）
                 // ECH需要TLS才能工作，所以必须禁用非TLS节点
                 if (enableECH) {
@@ -785,8 +861,8 @@
                             
                         const translations = {
                             zh: {
-                                title: '终端',
-                                terminal: '终端',
+                                title: '终端 v2.9.8',
+                                terminal: '终端 v2.9.8',
                                 congratulations: '恭喜你来到这',
                                 enterU: '请输入你U变量的值',
                                 enterD: '请输入你D变量的值',
@@ -802,8 +878,8 @@
                                  reenter: '请重新输入有效的UUID'
                             },
                             fa: {
-                                title: 'ترمینال',
-                                terminal: 'ترمینال',
+                                title: 'ترمینال v2.9.8',
+                                terminal: 'ترمینال v2.9.8',
                                 congratulations: 'تبریک می‌گوییم به شما',
                                 enterU: 'لطفا مقدار متغیر U خود را وارد کنید',
                                 enterD: 'لطفا مقدار متغیر D خود را وارد کنید',
@@ -829,152 +905,311 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>${t.title}</title>
         <style>
+            :root {
+                --cp-bg: #05030e;
+                --cp-bg-2: #0a0820;
+                --cp-cyan: #00f0ff;
+                --cp-cyan-d: #00b8c4;
+                --cp-pink: #ff2bd6;
+                --cp-pink-d: #d1239f;
+                --cp-purple: #a347ff;
+                --cp-yellow: #fff200;
+                --cp-mint: #00ff9d;
+                --cp-red: #ff3860;
+                --cp-text: #e6f5ff;
+                --cp-text-dim: #7aa9c4;
+                --cp-border: rgba(0, 240, 255, 0.55);
+                --cp-grid: rgba(255, 43, 214, 0.16);
+            }
             * { margin: 0; padding: 0; box-sizing: border-box; }
+            html, body { height: 100%; }
             body {
-                font-family: "Courier New", monospace;
-                background: #000; color: #00ff00; min-height: 100vh;
-                overflow-x: hidden; position: relative;
+                font-family: "JetBrains Mono", "Fira Code", "Courier New", monospace;
+                background: radial-gradient(ellipse at 20% 10%, #2a0040 0%, var(--cp-bg) 55%, #000 100%);
+                color: var(--cp-text);
+                min-height: 100vh;
+                overflow-x: hidden;
+                position: relative;
                 display: flex; justify-content: center; align-items: center;
             }
+            body::before {
+                content: ""; position: fixed; inset: 0;
+                background-image:
+                    linear-gradient(var(--cp-grid) 1px, transparent 1px),
+                    linear-gradient(90deg, var(--cp-grid) 1px, transparent 1px);
+                background-size: 48px 48px;
+                mask-image: radial-gradient(ellipse at center, #000 30%, transparent 80%);
+                z-index: -3;
+                animation: cp-grid-slide 18s linear infinite;
+            }
+            body::after {
+                content: ""; position: fixed; inset: 0;
+                background: repeating-linear-gradient(
+                    180deg,
+                    rgba(255,255,255,0.04) 0,
+                    rgba(255,255,255,0.04) 1px,
+                    transparent 1px,
+                    transparent 3px
+                );
+                pointer-events: none;
+                z-index: 5;
+                mix-blend-mode: overlay;
+                animation: cp-scan-flicker 6s infinite;
+            }
+            @keyframes cp-grid-slide {
+                0% { background-position: 0 0, 0 0; }
+                100% { background-position: 48px 48px, 48px 48px; }
+            }
+            @keyframes cp-scan-flicker {
+                0%, 100% { opacity: 0.6; }
+                50% { opacity: 0.9; }
+            }
             .matrix-bg {
-                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-                background: #000;
-                z-index: -1;
+                position: fixed; inset: 0;
+                background:
+                    radial-gradient(circle at 80% 90%, rgba(255,43,214,0.18) 0%, transparent 45%),
+                    radial-gradient(circle at 10% 80%, rgba(0,240,255,0.18) 0%, transparent 45%);
+                z-index: -2;
+                pointer-events: none;
             }
-            @keyframes bg-pulse {
-                0%, 100% { background: linear-gradient(45deg, #000 0%, #001100 50%, #000 100%); }
-                50% { background: linear-gradient(45deg, #000 0%, #002200 50%, #000 100%); }
-            }
-            .matrix-rain {
-                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-                background: transparent;
-                z-index: -1;
-                display: none;
-            }
-            @keyframes matrix-fall {
-                0% { transform: translateY(-100%); }
-                100% { transform: translateY(100vh); }
-            }
+            .matrix-rain { display: none; }
             .matrix-code-rain {
-                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                position: fixed; inset: 0;
                 pointer-events: none; z-index: -1;
                 overflow: hidden;
-                display: none;
             }
             .matrix-column {
-                position: absolute; top: -100%; left: 0;
-                color: #00ff00; font-family: "Courier New", monospace;
-                font-size: 14px; line-height: 1.2;
-                text-shadow: 0 0 5px #00ff00;
+                position: absolute; top: -120%; left: 0;
+                color: var(--cp-cyan);
+                font-family: "JetBrains Mono", "Courier New", monospace;
+                font-size: 14px; line-height: 1.25;
+                text-shadow: 0 0 6px var(--cp-cyan), 0 0 12px rgba(0,240,255,0.5);
+                animation: cp-drop linear infinite;
             }
-            @keyframes matrix-drop {
-                0% { top: -100%; opacity: 1; }
-                10% { opacity: 1; }
-                90% { opacity: 0.3; }
-                100% { top: 100vh; opacity: 0; }
+            @keyframes cp-drop {
+                0%   { top: -120%; opacity: 0; }
+                10%  { opacity: 0.85; }
+                90%  { opacity: 0.4; }
+                100% { top: 110vh; opacity: 0; }
             }
-            .matrix-column:nth-child(odd) {
-                animation-duration: 12s;
-                animation-delay: -2s;
-            }
-            .matrix-column:nth-child(even) {
-                animation-duration: 18s;
-                animation-delay: -5s;
-            }
-            .matrix-column:nth-child(3n) {
-                animation-duration: 20s;
-                animation-delay: -8s;
-            }
+            .matrix-column:nth-child(odd)  { animation-duration: 12s; }
+            .matrix-column:nth-child(even) { animation-duration: 18s; color: var(--cp-pink); text-shadow: 0 0 6px var(--cp-pink), 0 0 14px rgba(255,43,214,0.5); }
+            .matrix-column:nth-child(3n)   { animation-duration: 20s; color: var(--cp-purple); text-shadow: 0 0 6px var(--cp-purple); }
+            .matrix-column:nth-child(5n)   { animation-duration: 9s; opacity: 0.6; }
+
             .terminal {
-                width: 90%; max-width: 800px; height: 500px;
-                background: rgba(0, 0, 0, 0.9);
-                border: 2px solid #00ff00;
-                border-radius: 8px;
-                box-shadow: 0 0 30px rgba(0, 255, 0, 0.5), inset 0 0 20px rgba(0, 255, 0, 0.1);
-                backdrop-filter: blur(10px);
+                width: 92%; max-width: 860px; height: 540px;
+                background:
+                    linear-gradient(180deg, rgba(8,4,28,0.92) 0%, rgba(15,3,40,0.92) 100%);
+                border: 1px solid var(--cp-border);
+                border-radius: 0;
+                box-shadow:
+                    0 0 0 1px rgba(255,43,214,0.25),
+                    0 0 28px rgba(0,240,255,0.35),
+                    0 0 80px rgba(255,43,214,0.18),
+                    inset 0 0 30px rgba(0,240,255,0.06);
+                clip-path: polygon(
+                    0 18px, 18px 0,
+                    calc(100% - 60px) 0, calc(100% - 42px) 18px,
+                    100% 18px, 100% calc(100% - 14px),
+                    calc(100% - 14px) 100%, 42px 100%,
+                    24px calc(100% - 14px), 0 calc(100% - 14px)
+                );
                 position: relative; z-index: 1;
                 overflow: hidden;
             }
+            .terminal::before {
+                content: ""; position: absolute; inset: 0;
+                background: repeating-linear-gradient(180deg, rgba(0,240,255,0.06) 0 1px, transparent 1px 4px);
+                pointer-events: none;
+                animation: cp-scan-flicker 5s infinite;
+            }
             .terminal-header {
-                background: rgba(0, 20, 0, 0.8);
-                padding: 10px 15px;
-                border-bottom: 1px solid #00ff00;
-                display: flex; align-items: center;
+                background: linear-gradient(90deg, rgba(255,43,214,0.18), rgba(0,240,255,0.18));
+                padding: 12px 18px;
+                border-bottom: 1px solid rgba(0,240,255,0.5);
+                display: flex; align-items: center; gap: 16px;
+                position: relative;
+            }
+            .terminal-header::after {
+                content: ""; position: absolute; left: 18px; right: 18px; bottom: -1px;
+                height: 1px;
+                background: linear-gradient(90deg, transparent, var(--cp-pink), var(--cp-cyan), transparent);
+                animation: cp-scan-line 4s linear infinite;
+            }
+            @keyframes cp-scan-line {
+                0% { transform: translateX(-30%); opacity: 0.4; }
+                50% { opacity: 1; }
+                100% { transform: translateX(30%); opacity: 0.4; }
             }
             .terminal-buttons {
                 display: flex; gap: 8px;
             }
             .terminal-button {
-                width: 12px; height: 12px; border-radius: 50%;
-                background: #ff5f57; border: none;
+                width: 12px; height: 12px;
+                background: var(--cp-pink);
+                box-shadow: 0 0 8px var(--cp-pink);
+                border: none; transform: rotate(45deg);
             }
-            .terminal-button:nth-child(2) { background: #ffbd2e; }
-            .terminal-button:nth-child(3) { background: #28ca42; }
+            .terminal-button:nth-child(2) { background: var(--cp-yellow); box-shadow: 0 0 8px var(--cp-yellow); }
+            .terminal-button:nth-child(3) { background: var(--cp-mint); box-shadow: 0 0 8px var(--cp-mint); }
             .terminal-title {
-                margin-left: 15px; color: #00ff00;
-                font-size: 14px; font-weight: bold;
+                color: var(--cp-cyan);
+                font-size: 13px; font-weight: 700;
+                letter-spacing: 0.25em;
+                text-transform: uppercase;
+                text-shadow: 0 0 6px var(--cp-cyan);
             }
+            .terminal-title::before { content: "// "; color: var(--cp-pink); }
             .terminal-body {
-                padding: 20px; height: calc(100% - 50px);
+                padding: 24px; height: calc(100% - 52px);
                 overflow-y: auto; font-size: 14px;
-                line-height: 1.4;
+                line-height: 1.6;
+                position: relative;
+            }
+            .terminal-body::-webkit-scrollbar { width: 6px; }
+            .terminal-body::-webkit-scrollbar-thumb {
+                background: linear-gradient(180deg, var(--cp-pink), var(--cp-cyan));
             }
             .terminal-line {
-                margin-bottom: 8px; display: flex; align-items: center;
+                margin-bottom: 8px; display: flex; align-items: center; gap: 8px;
+                flex-wrap: wrap;
             }
             .terminal-prompt {
-                color: #00ff00; margin-right: 10px;
-                font-weight: bold;
+                color: var(--cp-pink);
+                font-weight: 700;
+                text-shadow: 0 0 6px var(--cp-pink);
+                letter-spacing: 0.05em;
             }
+            .terminal-prompt::before { content: "▍"; color: var(--cp-cyan); margin-right: 4px; }
             .terminal-input {
                 background: transparent; border: none; outline: none;
-                color: #00ff00; font-family: "Courier New", monospace;
-                font-size: 14px; flex: 1;
-                caret-color: #00ff00;
+                color: var(--cp-cyan);
+                font-family: inherit;
+                font-size: 14px; flex: 1; min-width: 0;
+                caret-color: var(--cp-pink);
+                text-shadow: 0 0 4px var(--cp-cyan);
             }
-            .terminal-input::placeholder {
-                color: #00aa00; opacity: 0.7;
-            }
+            .terminal-input::placeholder { color: var(--cp-text-dim); opacity: 0.75; }
             .terminal-cursor {
-                display: inline-block; width: 8px; height: 16px;
-                background: #00ff00;
+                display: inline-block; width: 9px; height: 16px;
+                background: var(--cp-pink);
                 margin-left: 2px;
+                box-shadow: 0 0 8px var(--cp-pink);
+                animation: cp-blink 1s steps(2, end) infinite;
             }
-            @keyframes blink {
-                0%, 50% { opacity: 1; }
-                51%, 100% { opacity: 0; }
+            @keyframes cp-blink {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0; }
             }
-            .terminal-output {
-                color: #00aa00; margin: 5px 0;
+            .terminal-output { color: var(--cp-cyan); margin: 4px 0; }
+            .terminal-error  { color: var(--cp-red); margin: 4px 0; text-shadow: 0 0 6px var(--cp-red); }
+            .terminal-success{ color: var(--cp-mint); margin: 4px 0; text-shadow: 0 0 6px var(--cp-mint); }
+
+            .cp-hud {
+                position: fixed; top: 18px; right: 22px;
+                color: var(--cp-cyan);
+                font-family: "JetBrains Mono", monospace;
+                font-size: 11px; letter-spacing: 0.2em;
+                text-transform: uppercase;
+                text-align: right;
+                opacity: 0.85;
+                z-index: 1000;
             }
-            .terminal-error {
-                color: #ff4444; margin: 5px 0;
+            .cp-hud .cp-hud-label { color: var(--cp-pink); }
+            .cp-hud .cp-hud-line { display: block; }
+            .cp-lang-wrapper {
+                position: fixed; top: 18px; left: 22px; z-index: 1000;
+                display: flex; align-items: center; gap: 10px;
             }
-            .terminal-success {
-                color: #44ff44; margin: 5px 0;
+            .cp-lang-tag {
+                color: var(--cp-pink); font-size: 11px;
+                letter-spacing: 0.25em; text-transform: uppercase;
+                text-shadow: 0 0 6px var(--cp-pink);
             }
-            .matrix-text {
-                position: fixed; top: 20px; right: 20px;
-                color: #00ff00; font-family: "Courier New", monospace;
-                font-size: 0.8rem; opacity: 0.6;
+            #languageSelector {
+                background: rgba(8,4,28,0.85);
+                border: 1px solid var(--cp-cyan);
+                color: var(--cp-cyan);
+                padding: 6px 12px;
+                font-family: inherit;
+                font-size: 12px;
+                cursor: pointer;
+                letter-spacing: 0.12em;
+                text-shadow: 0 0 6px var(--cp-cyan);
+                box-shadow: 0 0 12px rgba(0,240,255,0.35);
+                clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
             }
-            @keyframes matrix-flicker {
-                0%, 100% { opacity: 0.6; }
-                50% { opacity: 1; }
+            #languageSelector option { background: var(--cp-bg-2); color: var(--cp-cyan); }
+
+            /* FX toggle - 页面特效图形化开关 */
+            .cp-fx-toggle {
+                position: fixed; top: 68px; left: 22px; z-index: 1001;
+                background: rgba(8,4,28,0.85);
+                border: 1px solid var(--cp-mint);
+                color: var(--cp-mint);
+                padding: 6px 12px;
+                font-family: inherit;
+                font-size: 11px;
+                letter-spacing: 0.18em;
+                text-transform: uppercase;
+                cursor: pointer;
+                text-shadow: 0 0 6px var(--cp-mint);
+                box-shadow: 0 0 10px rgba(0,255,157,0.35);
+                clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
+                transition: all 0.2s ease;
+                display: inline-flex; align-items: center; gap: 6px;
+            }
+            .cp-fx-toggle:hover { color: var(--cp-pink); border-color: var(--cp-pink); text-shadow: 0 0 8px var(--cp-pink); box-shadow: 0 0 16px rgba(255,43,214,0.55); }
+            .cp-fx-toggle .cp-fx-dot { width: 6px; height: 6px; background: var(--cp-mint); border-radius: 50%; box-shadow: 0 0 8px var(--cp-mint); transition: all 0.2s; }
+            body.fx-off .cp-fx-toggle { color: var(--cp-text-dim); border-color: var(--cp-text-dim); text-shadow: none; box-shadow: none; }
+            body.fx-off .cp-fx-toggle .cp-fx-dot { background: transparent; border: 1px solid var(--cp-text-dim); box-shadow: none; }
+            body.fx-off .matrix-bg,
+            body.fx-off .matrix-code-rain,
+            body.fx-off .matrix-column { display: none !important; }
+            body.fx-off::before,
+            body.fx-off::after { display: none !important; content: none !important; }
+            body.fx-off { background: var(--cp-bg) !important; }
+            body.fx-off * {
+                animation: none !important;
+                transition: color 0.15s, background-color 0.15s, border-color 0.15s, box-shadow 0.15s !important;
+            }
+            body.fx-off .cp-glitch::before,
+            body.fx-off .cp-glitch::after { display: none !important; }
+            body.fx-off .terminal-cursor::after { animation: none !important; }
+
+            .cp-glitch {
+                font-family: "JetBrains Mono", monospace;
+                font-weight: 700;
+                letter-spacing: 0.18em;
+                text-transform: uppercase;
+                color: var(--cp-cyan);
+                text-shadow:
+                    0 0 8px var(--cp-cyan),
+                    -2px 0 var(--cp-pink),
+                    2px 0 var(--cp-mint);
             }
         </style>
     </head>
     <body>
         <div class="matrix-bg"></div>
-        <div class="matrix-rain"></div>
         <div class="matrix-code-rain" id="matrixCodeRain"></div>
-            <div class="matrix-text">${t.terminal}</div>
-            <div style="position: fixed; top: 20px; left: 20px; z-index: 1000;">
-                <select id="languageSelector" style="background: rgba(0, 20, 0, 0.9); border: 2px solid #00ff00; color: #00ff00; padding: 8px 12px; font-family: 'Courier New', monospace; font-size: 14px; cursor: pointer; text-shadow: 0 0 5px #00ff00; box-shadow: 0 0 15px rgba(0, 255, 0, 0.4);" onchange="changeLanguage(this.value)">
+            <div class="cp-hud">
+                <span class="cp-hud-line"><span class="cp-hud-label">SYS::</span> ${t.terminal}</span>
+                <span class="cp-hud-line"><span class="cp-hud-label">NODE::</span> NIGHT_CITY</span>
+                <span class="cp-hud-line"><span class="cp-hud-label">LINK::</span> SECURE / ENC</span>
+            </div>
+            <div class="cp-lang-wrapper">
+                <span class="cp-lang-tag">LANG_</span>
+                <select id="languageSelector" onchange="changeLanguage(this.value)">
                     <option value="zh" ${!isFarsi ? 'selected' : ''}>🇨🇳 中文</option>
                     <option value="fa" ${isFarsi ? 'selected' : ''}>🇮🇷 فارسی</option>
                 </select>
             </div>
+            <button type="button" id="cpFxToggle" class="cp-fx-toggle" onclick="cpToggleFx()" title="${isFarsi ? 'تغییر افکت‌های صفحه' : '切换页面特效'}" aria-label="FX toggle">
+                <span class="cp-fx-dot" aria-hidden="true"></span>
+                <span id="cpFxLabel">FX: ON</span>
+            </button>
         <div class="terminal">
             <div class="terminal-header">
                 <div class="terminal-buttons">
@@ -982,7 +1217,7 @@
                     <div class="terminal-button"></div>
                     <div class="terminal-button"></div>
                 </div>
-                    <div class="terminal-title">${t.terminal}</div>
+                    <div class="terminal-title cp-glitch">${t.terminal}</div>
             </div>
             <div class="terminal-body" id="terminalBody">
                 <div class="terminal-line">
@@ -1005,46 +1240,83 @@
             </div>
         </div>
         <script>
+            // 页面特效图形化开关 (localStorage 持久化)
+            window.cpApplyFx = function() {
+                var off = localStorage.getItem('cp-fx-off') === '1';
+                document.body.classList.toggle('fx-off', off);
+                var lbl = document.getElementById('cpFxLabel');
+                if (lbl) lbl.textContent = off ? 'FX: OFF' : 'FX: ON';
+                if (off) {
+                    var rain = document.getElementById('matrixCodeRain');
+                    if (rain) rain.innerHTML = '';
+                } else if (typeof createMatrixRain === 'function') {
+                    var r = document.getElementById('matrixCodeRain');
+                    if (r && !r.firstChild) createMatrixRain();
+                }
+            };
+            window.cpToggleFx = function() {
+                var off = localStorage.getItem('cp-fx-off') === '1';
+                localStorage.setItem('cp-fx-off', off ? '0' : '1');
+                window.cpApplyFx();
+            };
+            (function() {
+                if (localStorage.getItem('cp-fx-off') === '1') {
+                    document.documentElement.classList.add('fx-off-preload');
+                    document.addEventListener('DOMContentLoaded', function() {
+                        document.body.classList.add('fx-off');
+                    });
+                }
+            })();
+
             function createMatrixRain() {
+                if (document.body && document.body.classList.contains('fx-off')) return;
                 const matrixContainer = document.getElementById('matrixCodeRain');
-                const matrixChars = '01ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-                const columns = Math.floor(window.innerWidth / 18);
+                if (!matrixContainer) return;
+                const cyberChars = '01アイウエオカキクケコサシスセソタチツテトナニヌネノ$%#@!?<>+=ABCDEF';
+                const palette = ['#00f0ff', '#ff2bd6', '#a347ff', '#00ff9d'];
+                const columns = Math.floor(window.innerWidth / 20);
 
                 for (let i = 0; i < columns; i++) {
                     const column = document.createElement('div');
                     column.className = 'matrix-column';
-                    column.style.left = (i * 18) + 'px';
-                    column.style.animationDelay = Math.random() * 15 + 's';
-                    column.style.animationDuration = (Math.random() * 15 + 8) + 's';
+                    column.style.left = (i * 20) + 'px';
+                    column.style.animationDelay = (-Math.random() * 15) + 's';
+                    column.style.animationDuration = (Math.random() * 14 + 8) + 's';
                     column.style.fontSize = (Math.random() * 4 + 12) + 'px';
-                    column.style.opacity = Math.random() * 0.8 + 0.2;
+                    column.style.opacity = (Math.random() * 0.7 + 0.3).toFixed(2);
 
                     let text = '';
-                    const charCount = Math.floor(Math.random() * 30 + 20);
+                    const charCount = Math.floor(Math.random() * 30 + 18);
                     for (let j = 0; j < charCount; j++) {
-                        const char = matrixChars[Math.floor(Math.random() * matrixChars.length)];
-                        const brightness = Math.random() > 0.1 ? '#00ff00' : '#00aa00';
-                        text += '<span style="color: ' + brightness + ';">' + char + '</span><br>';
+                        const char = cyberChars[Math.floor(Math.random() * cyberChars.length)];
+                        const useAccent = Math.random() > 0.85;
+                        const color = useAccent ? palette[Math.floor(Math.random() * palette.length)] : '';
+                        text += color
+                            ? ('<span style="color:' + color + ';text-shadow:0 0 8px ' + color + ';">' + char + '</span><br>')
+                            : ('<span>' + char + '</span><br>');
                     }
                     column.innerHTML = text;
                     matrixContainer.appendChild(column);
                 }
 
                 setInterval(function() {
-                    const columns = matrixContainer.querySelectorAll('.matrix-column');
-                    columns.forEach(function(column) {
-                        if (Math.random() > 0.95) {
+                    const cols = matrixContainer.querySelectorAll('.matrix-column');
+                    cols.forEach(function(column) {
+                        if (Math.random() > 0.94) {
                             const chars = column.querySelectorAll('span');
                             if (chars.length > 0) {
-                                const randomChar = chars[Math.floor(Math.random() * chars.length)];
-                                randomChar.style.color = '#ffffff';
+                                const target = chars[Math.floor(Math.random() * chars.length)];
+                                const prev = target.style.color;
+                                target.style.color = '#ffffff';
+                                target.style.textShadow = '0 0 10px #ffffff, 0 0 18px #00f0ff';
                                 setTimeout(function() {
-                                    randomChar.style.color = '#00ff00';
+                                    target.style.color = prev;
+                                    target.style.textShadow = '';
                                 }, 200);
                             }
                         }
                     });
-                }, 100);
+                }, 110);
             }
 
             function isValidUUID(uuid) {
@@ -1173,13 +1445,16 @@
             });
 
             document.addEventListener('DOMContentLoaded', function() {
+                try { createMatrixRain(); } catch (e) {}
                 const input = document.getElementById('uuidInput');
-                input.focus();
-                input.addEventListener('keypress', function(e) {
-                    if (e.key === 'Enter') {
-                        handleUUIDInput();
-                    }
-                });
+                if (input) {
+                    input.focus();
+                    input.addEventListener('keypress', function(e) {
+                        if (e.key === 'Enter') {
+                            handleUUIDInput();
+                        }
+                    });
+                }
             });
         </script>
     </body>
@@ -1278,7 +1553,7 @@
                 const path = params.get('path') || '/?ed=2048';
                 const host = params.get('host') || server;
                 const servername = params.get('sni') || host;
-                const alpn = params.get('alpn') || 'h3';
+                const alpnRaw = params.get('alpn') || '';
                 const fingerprint = params.get('fp') || params.get('client-fingerprint') || 'chrome';
                 const ech = params.get('ech');
 
@@ -1295,7 +1570,7 @@
 
                 if (tls) {
                     node.servername = servername;
-                    node.alpn = alpn.split(',').map(a => a.trim());
+                    if (alpnRaw) node.alpn = alpnRaw.split(',').map(a => a.trim()).filter(Boolean);
                     node['skip-cert-verify'] = false;
                 }
 
@@ -1332,7 +1607,7 @@
                 const path = params.get('path') || '/?ed=2048';
                 const host = params.get('host') || server;
                 const sni = params.get('sni') || host;
-                const alpn = params.get('alpn') || 'h3';
+                const alpnRaw = params.get('alpn') || '';
                 const ech = params.get('ech');
 
                 const node = {
@@ -1343,9 +1618,9 @@
                     password: password,
                     network: network,
                     sni: sni,
-                    alpn: alpn.split(',').map(a => a.trim()),
                     'skip-cert-verify': false
                 };
+                if (alpnRaw) node.alpn = alpnRaw.split(',').map(a => a.trim()).filter(Boolean);
 
                 if (network === 'ws') {
                     node['ws-opts'] = {
@@ -1372,69 +1647,792 @@
         return null;
     }
 
-    // 生成 Clash 配置
-    async function generateClashConfig(links, request, user) {
-        // 先通过订阅转换服务获取 Clash 配置
-        const subscriptionUrl = new URL(request.url);
-        subscriptionUrl.pathname = subscriptionUrl.pathname.replace(/\/sub$/, '') + '/sub';
-        subscriptionUrl.searchParams.set('target', 'base64');
-        const encodedUrl = encodeURIComponent(subscriptionUrl.toString());
-        const converterUrl = `${scu}?target=clash&url=${encodedUrl}&insert=false&emoji=true&list=false&xudp=false&udp=false&tfo=false&expand=true&scv=false&fdn=false&new_name=true`;
+    // ============================================================
+    // 内部订阅转换器 - 不依赖外部 sub-converter
+    // ============================================================
 
-        try {
-            const response = await fetch(converterUrl);
-            if (!response.ok) {
-                throw new Error('订阅转换服务失败');
-            }
-
-            let clashConfig = await response.text();
-
-            // 如果 ECH 开启，为所有节点添加 ECH 参数
-            if (enableECH) {
-                // 处理单行格式的节点：  - {name: ..., server: ..., ...}
-                // 需要正确处理嵌套的花括号（如 ws-opts: {path: "...", headers: {Host: ...}}）
-                clashConfig = clashConfig.split('\n').map(line => {
-                    // 检查是否是节点行（以 "  - {" 开头，且包含 name: 和 server:）
-                    if (/^\s*-\s*\{/.test(line) && line.includes('name:') && line.includes('server:')) {
-                        // 检查是否已经有 ech-opts
-                        if (line.includes('ech-opts')) {
-                            return line; // 已有 ech-opts，不修改
-                        }
-                        // 找到最后一个 } 的位置（从右往左查找，处理嵌套花括号）
-                        const lastBraceIndex = line.lastIndexOf('}');
-                        if (lastBraceIndex > 0) {
-                            // 检查最后一个 } 之前是否有内容，确保格式正确
-                            const beforeBrace = line.substring(0, lastBraceIndex).trim();
-                            if (beforeBrace.length > 0) {
-                                // 在最后一个 } 之前添加 , ech-opts: {enable: true, query-server-name: ...}
-                                // 确保在逗号前有空格
-                                const echDomain = customECHDomain || 'cloudflare-ech.com';
-                                const needsComma = !beforeBrace.endsWith(',') && !beforeBrace.endsWith('{');
-                                return line.substring(0, lastBraceIndex) + (needsComma ? ', ' : ' ') + `ech-opts: {enable: true, query-server-name: ${echDomain}}` + line.substring(lastBraceIndex);
-                            }
-                        }
-                    }
-                    return line;
-                }).join('\n');
-
-                // 处理多行格式的节点（如果存在）
-                // 只处理单行格式，多行格式由订阅转换服务处理，不需要额外修改
-                // 如果订阅转换服务返回多行格式，通常已经是正确的格式
-            }
-
-            // 替换 DNS nameserver 为阿里的加密 DNS
-            clashConfig = clashConfig.replace(/^(\s*nameserver:\s*\n)((?:\s*-\s*[^\n]+\n)*)/m, (match, header, items) => {
-                // 替换所有 nameserver 项为阿里的加密 DNS
-                const dnsServer = customDNS || 'https://223.5.5.5/dns-query';
-                return header + `    - ${dnsServer}\n`;
-            });
-
-            return clashConfig;
-        } catch (e) {
-            // 如果订阅转换失败，返回错误
-            throw new Error('无法获取 Clash 配置: ' + e.message);
-        }
+    // 用于 YAML 引号包裹（避免 IPv6 方括号、逗号等被解析为数组）
+    function yq(v) {
+        if (v == null) return '""';
+        const s = String(v);
+        return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
     }
+
+    // URL.hostname 对 IPv6 会带方括号，直接写入 YAML 会被当成数组
+    function normalizeServerHost(hostname) {
+        if (!hostname) return hostname;
+        const h = String(hostname);
+        if (h.startsWith('[') && h.endsWith(']')) return h.slice(1, -1);
+        return h;
+    }
+
+    // Clash 策略组 proxies：策略组 + 全部节点（避免分组里只有「节点选择」没有具体节点）
+    function clashSelectProxies(names, opts = {}) {
+        const { directFirst = false, extraGroups = [] } = opts;
+        const nodeLines = names.length
+            ? names.map(n => `      - ${yq(n)}`).join('\n')
+            : '      - DIRECT';
+        const lines = [];
+        if (directFirst) {
+            lines.push('      - "🎯 全球直连"', '      - "🚀 节点选择"');
+        } else {
+            lines.push('      - "🚀 节点选择"', '      - "🎯 全球直连"');
+        }
+        for (const g of extraGroups) lines.push(`      - ${yq(g)}`);
+        lines.push(nodeLines);
+        return lines.join('\n');
+    }
+
+    // Surge / Loon 策略组列表：策略组 + 全部节点
+    function iniPolicyList(names, opts = {}) {
+        const { directFirst = false, extraGroups = [], compact = false } = opts;
+        const sep = compact ? ',' : ', ';
+        const list = names.length ? names.join(sep) : 'DIRECT';
+        const parts = [];
+        if (directFirst) parts.push('🎯 全球直连', '🚀 节点选择');
+        else parts.push('🚀 节点选择', '🎯 全球直连');
+        parts.push(...extraGroups);
+        if (names.length) parts.push(list);
+        return parts.join(sep);
+    }
+
+    // 解析任意分享链接为通用节点对象 (vless / trojan / vless-xhttp)
+    function parseShareLink(link) {
+        try {
+            if (link.startsWith('vless://')) {
+                const url = new URL(link);
+                const p = new URLSearchParams(url.search);
+                return {
+                    proto: 'vless',
+                    name: decodeURIComponent(url.hash.substring(1)) || (url.hostname + ':' + url.port),
+                    uuid: url.username,
+                    server: normalizeServerHost(url.hostname),
+                    port: parseInt(url.port) || 443,
+                    tls: p.get('security') === 'tls' || p.get('security') === 'reality',
+                    network: p.get('type') || 'ws',
+                    path: p.get('path') || '/?ed=2048',
+                    host: normalizeServerHost(p.get('host') || url.hostname),
+                    sni: normalizeServerHost(p.get('sni') || p.get('host') || url.hostname),
+                    alpn: (p.get('alpn') || '').split(',').map(s => s.trim()).filter(Boolean),
+                    fp: p.get('fp') || 'chrome',
+                    flow: p.get('flow') || '',
+                    encryption: p.get('encryption') || 'none',
+                    mode: p.get('mode') || '',
+                    ech: p.get('ech') || ''
+                };
+            }
+            if (link.startsWith('trojan://')) {
+                const url = new URL(link);
+                const p = new URLSearchParams(url.search);
+                return {
+                    proto: 'trojan',
+                    name: decodeURIComponent(url.hash.substring(1)) || (url.hostname + ':' + url.port),
+                    password: decodeURIComponent(url.username),
+                    server: normalizeServerHost(url.hostname),
+                    port: parseInt(url.port) || 443,
+                    tls: true,
+                    network: p.get('type') || 'ws',
+                    path: p.get('path') || '/?ed=2048',
+                    host: normalizeServerHost(p.get('host') || url.hostname),
+                    sni: normalizeServerHost(p.get('sni') || p.get('host') || url.hostname),
+                    alpn: (p.get('alpn') || '').split(',').map(s => s.trim()).filter(Boolean),
+                    fp: p.get('fp') || 'chrome',
+                    ech: p.get('ech') || ''
+                };
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    // 单个节点 → Clash 块级 YAML（避免 flow style 解析错误）
+    function buildClashNodeLine(n) {
+        const lines = [];
+        const server = normalizeServerHost(n.server);
+        const host = normalizeServerHost(n.host) || server;
+        const sni = normalizeServerHost(n.sni) || host;
+
+        lines.push(`  - name: ${yq(n.name)}`);
+        lines.push(`    type: ${n.proto}`);
+        lines.push(`    server: ${yq(server)}`);
+        lines.push(`    port: ${n.port}`);
+        if (n.proto === 'vless') {
+            lines.push(`    uuid: ${n.uuid}`);
+            lines.push(`    udp: true`);
+            lines.push(`    tls: ${n.tls ? 'true' : 'false'}`);
+            if (n.flow) lines.push(`    flow: ${yq(n.flow)}`);
+            lines.push(`    client-fingerprint: ${yq(n.fp || 'chrome')}`);
+        } else if (n.proto === 'trojan') {
+            lines.push(`    password: ${yq(n.password)}`);
+            lines.push(`    udp: true`);
+            lines.push(`    client-fingerprint: ${yq(n.fp || 'chrome')}`);
+        }
+        if (n.tls) {
+            lines.push(`    servername: ${yq(sni)}`);
+            if (n.alpn && n.alpn.length) {
+                lines.push(`    alpn: [${n.alpn.map(a => yq(a)).join(', ')}]`);
+            }
+            lines.push(`    skip-cert-verify: false`);
+        }
+        if (n.network === 'ws' || n.network === 'xhttp') {
+            lines.push(`    network: ws`);
+            lines.push(`    ws-opts:`);
+            lines.push(`      path: ${yq(n.path)}`);
+            lines.push(`      headers:`);
+            lines.push(`        Host: ${yq(host)}`);
+        } else if (n.network === 'grpc') {
+            lines.push(`    network: grpc`);
+            lines.push(`    grpc-opts:`);
+            lines.push(`      grpc-service-name: ${yq(n.path)}`);
+        }
+        if (n.ech) {
+            const echDomain = customECHDomain || 'cloudflare-ech.com';
+            lines.push(`    ech-opts:`);
+            lines.push(`      enable: true`);
+            lines.push(`      query-server-name: ${yq(echDomain)}`);
+        }
+        return lines.join('\n');
+    }
+
+    // 内部生成 Clash YAML（完整规则集：Loyalsoldier rule-providers）
+    function generateClashYaml(links, opts = {}) {
+        const nodes = links.map(parseShareLink).filter(n => n && (n.proto === 'vless' || n.proto === 'trojan'));
+        const names = nodes.map(n => n.name);
+        const dnsServer = customDNS || 'https://223.5.5.5/dns-query';
+
+        const head = [
+            'mixed-port: 7890',
+            'allow-lan: true',
+            'mode: rule',
+            'log-level: info',
+            'ipv6: true',
+            'external-controller: 127.0.0.1:9090',
+            'unified-delay: true',
+            'tcp-concurrent: true',
+            'geodata-mode: true',
+            'geo-auto-update: true',
+            'geo-update-interval: 24',
+            'geox-url:',
+            '  geoip: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat"',
+            '  geosite: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat"',
+            '  mmdb: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb"',
+            '  asn: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/GeoLite2-ASN.mmdb"',
+            'sniffer:',
+            '  enable: true',
+            '  force-dns-mapping: true',
+            '  parse-pure-ip: true',
+            '  sniff:',
+            '    HTTP:',
+            '      ports: [80, 8080-8880]',
+            '      override-destination: true',
+            '    TLS:',
+            '      ports: [443, 8443]',
+            '    QUIC:',
+            '      ports: [443, 8443]',
+            'dns:',
+            '  enable: true',
+            '  listen: 0.0.0.0:1053',
+            '  ipv6: true',
+            '  enhanced-mode: fake-ip',
+            '  fake-ip-range: 198.18.0.1/16',
+            '  fake-ip-filter:',
+            '    - "*.lan"',
+            '    - "+.local"',
+            '    - "+.market.xiaomi.com"',
+            '    - "+.msftconnecttest.com"',
+            '    - "+.msftncsi.com"',
+            '    - "localhost.ptlogin2.qq.com"',
+            '    - "+.srv.nintendo.net"',
+            '    - "+.stun.playstation.net"',
+            '    - "+.xboxlive.com"',
+            '  default-nameserver:',
+            '    - 223.5.5.5',
+            '    - 119.29.29.29',
+            '  nameserver:',
+            `    - ${dnsServer}`,
+            '    - https://119.29.29.29/dns-query',
+            '  fallback:',
+            '    - https://1.1.1.1/dns-query',
+            '    - https://8.8.8.8/dns-query',
+            '  fallback-filter:',
+            '    geoip: true',
+            '    geoip-code: CN',
+            '    ipcidr:',
+            '      - 240.0.0.0/4',
+            ''
+        ];
+
+        const proxiesBlock = ['proxies:'];
+        for (const n of nodes) proxiesBlock.push(buildClashNodeLine(n));
+
+        const nodeOnly = names.length ? names.map(n => `      - ${yq(n)}`).join('\n') : '      - DIRECT';
+        const proxyGroups = [
+            'proxy-groups:',
+            '  - name: "🚀 节点选择"',
+            '    type: select',
+            '    proxies:',
+            '      - "🎯 全球直连"',
+            nodeOnly,
+            '  - name: "🌍 国外媒体"',
+            '    type: select',
+            '    proxies:',
+            clashSelectProxies(names),
+            '  - name: "📺 哔哩哔哩"',
+            '    type: select',
+            '    proxies:',
+            clashSelectProxies(names, { directFirst: true }),
+            '  - name: "📹 油管视频"',
+            '    type: select',
+            '    proxies:',
+            clashSelectProxies(names, { extraGroups: ['🌍 国外媒体'] }),
+            '  - name: "🎬 奈飞视频"',
+            '    type: select',
+            '    proxies:',
+            clashSelectProxies(names, { extraGroups: ['🌍 国外媒体'] }),
+            '  - name: "📲 电报信息"',
+            '    type: select',
+            '    proxies:',
+            clashSelectProxies(names),
+            '  - name: "🌐 谷歌服务"',
+            '    type: select',
+            '    proxies:',
+            clashSelectProxies(names),
+            '  - name: "🤖 OpenAI"',
+            '    type: select',
+            '    proxies:',
+            clashSelectProxies(names),
+            '  - name: "Ⓜ️ 微软服务"',
+            '    type: select',
+            '    proxies:',
+            clashSelectProxies(names, { directFirst: true }),
+            '  - name: "🍎 苹果服务"',
+            '    type: select',
+            '    proxies:',
+            clashSelectProxies(names, { directFirst: true }),
+            '  - name: "🎯 全球直连"',
+            '    type: select',
+            '    proxies:',
+            '      - DIRECT',
+            '  - name: "🛑 全球拦截"',
+            '    type: select',
+            '    proxies:',
+            '      - REJECT',
+            '      - DIRECT',
+            '  - name: "🍃 应用净化"',
+            '    type: select',
+            '    proxies:',
+            '      - REJECT',
+            '      - DIRECT',
+            '  - name: "🐟 漏网之鱼"',
+            '    type: select',
+            '    proxies:',
+            clashSelectProxies(names),
+            ''
+        ];
+
+        // Loyalsoldier rule-providers (Clash 经典格式) - CDN: jsDelivr
+        const RP_BASE = 'https://fastly.jsdelivr.net/gh/Loyalsoldier/clash-rules@release';
+        const provider = (name, behavior) => [
+            `  ${name}:`,
+            `    type: http`,
+            `    behavior: ${behavior}`,
+            `    url: "${RP_BASE}/${name}.txt"`,
+            `    path: ./rulesets/loyalsoldier/${name}.txt`,
+            `    interval: 86400`
+        ].join('\n');
+
+        const ruleProviders = [
+            'rule-providers:',
+            provider('reject', 'domain'),
+            provider('icloud', 'domain'),
+            provider('apple', 'domain'),
+            provider('google', 'domain'),
+            provider('proxy', 'domain'),
+            provider('direct', 'domain'),
+            provider('private', 'domain'),
+            provider('gfw', 'domain'),
+            provider('greatfire', 'domain'),
+            provider('tld-not-cn', 'domain'),
+            provider('telegramcidr', 'ipcidr'),
+            provider('cncidr', 'ipcidr'),
+            provider('lancidr', 'ipcidr'),
+            provider('applications', 'classical'),
+            ''
+        ];
+
+        const rules = [
+            'rules:',
+            '  - DOMAIN-SUFFIX,acl4.ssr,🎯 全球直连',
+            '  - DOMAIN-SUFFIX,local,🎯 全球直连',
+            '  - DOMAIN,clash.razord.top,🎯 全球直连',
+            '  - DOMAIN,yacd.haishan.me,🎯 全球直连',
+            '  - DOMAIN,yacd.metacubex.one,🎯 全球直连',
+            '  - DOMAIN,d.metacubex.one,🎯 全球直连',
+            '  - DOMAIN-SUFFIX,googleapis.cn,🌐 谷歌服务',
+            '  - DOMAIN-SUFFIX,gstatic.com,🌐 谷歌服务',
+            '  - DOMAIN-SUFFIX,xn--ngstr-lra8j.com,🌐 谷歌服务',
+            '  - DOMAIN-SUFFIX,googlevideo.com,📹 油管视频',
+            '  - DOMAIN-SUFFIX,googleusercontent.com,🌐 谷歌服务',
+            '  - DOMAIN-KEYWORD,youtube,📹 油管视频',
+            '  - DOMAIN-SUFFIX,youtube.com,📹 油管视频',
+            '  - DOMAIN-SUFFIX,youtu.be,📹 油管视频',
+            '  - DOMAIN-KEYWORD,netflix,🎬 奈飞视频',
+            '  - DOMAIN-SUFFIX,nflxext.com,🎬 奈飞视频',
+            '  - DOMAIN-SUFFIX,nflxso.net,🎬 奈飞视频',
+            '  - DOMAIN-SUFFIX,nflxvideo.net,🎬 奈飞视频',
+            '  - DOMAIN-SUFFIX,nflximg.com,🎬 奈飞视频',
+            '  - DOMAIN-SUFFIX,nflximg.net,🎬 奈飞视频',
+            '  - DOMAIN-SUFFIX,netflix.com,🎬 奈飞视频',
+            '  - DOMAIN-SUFFIX,netflix.net,🎬 奈飞视频',
+            '  - DOMAIN-SUFFIX,bilibili.com,📺 哔哩哔哩',
+            '  - DOMAIN-SUFFIX,bilivideo.com,📺 哔哩哔哩',
+            '  - DOMAIN-SUFFIX,hdslb.com,📺 哔哩哔哩',
+            '  - DOMAIN-KEYWORD,openai,🤖 OpenAI',
+            '  - DOMAIN-KEYWORD,chatgpt,🤖 OpenAI',
+            '  - DOMAIN-SUFFIX,openai.com,🤖 OpenAI',
+            '  - DOMAIN-SUFFIX,chatgpt.com,🤖 OpenAI',
+            '  - DOMAIN-SUFFIX,oaistatic.com,🤖 OpenAI',
+            '  - DOMAIN-SUFFIX,oaiusercontent.com,🤖 OpenAI',
+            '  - DOMAIN-SUFFIX,anthropic.com,🤖 OpenAI',
+            '  - DOMAIN-SUFFIX,claude.ai,🤖 OpenAI',
+            '  - DOMAIN-SUFFIX,perplexity.ai,🤖 OpenAI',
+            '  - DOMAIN-SUFFIX,gemini.google.com,🤖 OpenAI',
+            '  - RULE-SET,applications,🎯 全球直连',
+            '  - RULE-SET,private,🎯 全球直连',
+            '  - RULE-SET,reject,🛑 全球拦截',
+            '  - RULE-SET,icloud,🍎 苹果服务',
+            '  - RULE-SET,apple,🍎 苹果服务',
+            '  - RULE-SET,google,🌐 谷歌服务',
+            '  - RULE-SET,proxy,🚀 节点选择',
+            '  - RULE-SET,gfw,🚀 节点选择',
+            '  - RULE-SET,greatfire,🚀 节点选择',
+            '  - RULE-SET,tld-not-cn,🚀 节点选择',
+            '  - RULE-SET,direct,🎯 全球直连',
+            '  - RULE-SET,lancidr,🎯 全球直连,no-resolve',
+            '  - RULE-SET,cncidr,🎯 全球直连,no-resolve',
+            '  - RULE-SET,telegramcidr,📲 电报信息,no-resolve',
+            '  - GEOIP,LAN,🎯 全球直连,no-resolve',
+            '  - GEOIP,CN,🎯 全球直连,no-resolve',
+            '  - MATCH,🐟 漏网之鱼'
+        ];
+
+        return [head.join('\n'), proxiesBlock.join('\n'), '', proxyGroups.join('\n'), ruleProviders.join('\n'), rules.join('\n'), ''].join('\n');
+    }
+
+    // 内部生成 Sing-box JSON 配置（完整规则集：MetaCubeX 镜像 rule-set）
+    function generateSingBoxJson(links) {
+        const nodes = links.map(parseShareLink).filter(n => n && (n.proto === 'vless' || n.proto === 'trojan'));
+        const dnsServer = customDNS || 'https://223.5.5.5/dns-query';
+        const outboundTags = nodes.map(n => n.name);
+
+        function nodeToOutbound(n) {
+            const out = {
+                type: n.proto,
+                tag: n.name,
+                server: normalizeServerHost(n.server),
+                server_port: n.port
+            };
+            if (n.proto === 'vless') {
+                out.uuid = n.uuid;
+                if (n.flow) out.flow = n.flow;
+            } else {
+                out.password = n.password;
+            }
+            if (n.tls) {
+                out.tls = {
+                    enabled: true,
+                    server_name: n.sni,
+                    insecure: false,
+                    utls: { enabled: true, fingerprint: n.fp || 'chrome' }
+                };
+                if (n.alpn && n.alpn.length) out.tls.alpn = n.alpn;
+                if (n.ech) {
+                    out.tls.ech = { enabled: true, pq_signature_schemes_enabled: false, dynamic_record_sizing_disabled: false };
+                }
+            }
+            if (n.network === 'ws' || n.network === 'xhttp') {
+                out.transport = {
+                    type: 'ws',
+                    path: n.path,
+                    headers: { Host: n.host },
+                    max_early_data: 2048,
+                    early_data_header_name: 'Sec-WebSocket-Protocol'
+                };
+            } else if (n.network === 'grpc') {
+                out.transport = { type: 'grpc', service_name: n.path };
+            }
+            return out;
+        }
+
+        // sing-box rule-set 远端 SRS 文件（CDN：jsDelivr 镜像 MetaCubeX 转换的 SagerNet 数据）
+        const SRS_BASE_SITE = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite';
+        const SRS_BASE_IP = 'https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip';
+        const siteRule = (tag) => ({ tag: `geosite-${tag}`, type: 'remote', format: 'binary', url: `${SRS_BASE_SITE}/${tag}.srs`, download_detour: 'direct' });
+        const ipRule = (tag) => ({ tag: `geoip-${tag}`, type: 'remote', format: 'binary', url: `${SRS_BASE_IP}/${tag}.srs`, download_detour: 'direct' });
+
+        const config = {
+            log: { level: 'info', timestamp: true },
+            dns: {
+                servers: [
+                    { tag: 'remote', address: dnsServer, detour: 'select' },
+                    { tag: 'local', address: '223.5.5.5', detour: 'direct' },
+                    { tag: 'fakeip', address: 'fakeip' },
+                    { tag: 'block', address: 'rcode://success' }
+                ],
+                rules: [
+                    { outbound: 'any', server: 'local' },
+                    { rule_set: 'geosite-category-ads-all', server: 'block' },
+                    { rule_set: 'geosite-cn', server: 'local' },
+                    { query_type: ['A', 'AAAA'], server: 'fakeip' }
+                ],
+                fakeip: { enabled: true, inet4_range: '198.18.0.0/15', inet6_range: 'fc00::/18' },
+                independent_cache: true,
+                strategy: 'ipv4_only'
+            },
+            inbounds: [
+                {
+                    type: 'mixed',
+                    tag: 'mixed-in',
+                    listen: '127.0.0.1',
+                    listen_port: 2080,
+                    sniff: true,
+                    sniff_override_destination: true
+                },
+                {
+                    type: 'tun',
+                    tag: 'tun-in',
+                    interface_name: 'sing-box',
+                    address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
+                    mtu: 9000,
+                    auto_route: true,
+                    strict_route: true,
+                    stack: 'mixed',
+                    sniff: true,
+                    sniff_override_destination: true
+                }
+            ],
+            outbounds: [
+                { type: 'selector', tag: 'select', outbounds: ['direct', ...outboundTags], default: outboundTags[0] || 'direct' },
+                { type: 'selector', tag: '🌍 国外媒体', outbounds: ['select', 'direct', ...outboundTags] },
+                { type: 'selector', tag: '📲 电报信息', outbounds: ['select', 'direct', ...outboundTags] },
+                { type: 'selector', tag: '🌐 谷歌服务', outbounds: ['select', 'direct', ...outboundTags] },
+                { type: 'selector', tag: '🤖 OpenAI', outbounds: ['select', 'direct', ...outboundTags] },
+                { type: 'selector', tag: 'Ⓜ️ 微软服务', outbounds: ['direct', 'select', ...outboundTags] },
+                { type: 'selector', tag: '🍎 苹果服务', outbounds: ['direct', 'select', ...outboundTags] },
+                { type: 'selector', tag: '📺 哔哩哔哩', outbounds: ['direct', 'select', ...outboundTags] },
+                { type: 'selector', tag: '📹 油管视频', outbounds: ['select', '🌍 国外媒体', 'direct', ...outboundTags] },
+                { type: 'selector', tag: '🎬 奈飞视频', outbounds: ['select', '🌍 国外媒体', 'direct', ...outboundTags] },
+                { type: 'selector', tag: '🎯 全球直连', outbounds: ['direct'] },
+                { type: 'selector', tag: '🐟 漏网之鱼', outbounds: ['select', 'direct', ...outboundTags] },
+                ...nodes.map(nodeToOutbound),
+                { type: 'direct', tag: 'direct' },
+                { type: 'block', tag: 'block' },
+                { type: 'dns', tag: 'dns-out' }
+            ],
+            route: {
+                rule_set: [
+                    siteRule('cn'),
+                    siteRule('private'),
+                    siteRule('apple'),
+                    siteRule('apple-cn'),
+                    siteRule('microsoft'),
+                    siteRule('microsoft@cn'),
+                    siteRule('google'),
+                    siteRule('telegram'),
+                    siteRule('openai'),
+                    siteRule('anthropic'),
+                    siteRule('youtube'),
+                    siteRule('netflix'),
+                    siteRule('disney'),
+                    siteRule('spotify'),
+                    siteRule('tiktok'),
+                    siteRule('twitter'),
+                    siteRule('facebook'),
+                    siteRule('github'),
+                    siteRule('geolocation-!cn'),
+                    siteRule('category-ads-all'),
+                    ipRule('cn'),
+                    ipRule('private'),
+                    ipRule('telegram')
+                ],
+                rules: [
+                    { protocol: 'dns', outbound: 'dns-out' },
+                    { ip_is_private: true, outbound: 'direct' },
+                    { rule_set: 'geosite-category-ads-all', outbound: 'block' },
+                    { rule_set: 'geosite-private', outbound: 'direct' },
+                    { rule_set: 'geosite-apple-cn', outbound: 'direct' },
+                    { rule_set: 'geosite-microsoft@cn', outbound: 'direct' },
+                    { rule_set: 'geosite-apple', outbound: '🍎 苹果服务' },
+                    { rule_set: 'geosite-microsoft', outbound: 'Ⓜ️ 微软服务' },
+                    { rule_set: 'geosite-openai', outbound: '🤖 OpenAI' },
+                    { rule_set: 'geosite-anthropic', outbound: '🤖 OpenAI' },
+                    { rule_set: 'geosite-telegram', outbound: '📲 电报信息' },
+                    { rule_set: 'geoip-telegram', outbound: '📲 电报信息' },
+                    { rule_set: 'geosite-google', outbound: '🌐 谷歌服务' },
+                    { rule_set: 'geosite-youtube', outbound: '🌍 国外媒体' },
+                    { rule_set: 'geosite-netflix', outbound: '🌍 国外媒体' },
+                    { rule_set: 'geosite-disney', outbound: '🌍 国外媒体' },
+                    { rule_set: 'geosite-spotify', outbound: '🌍 国外媒体' },
+                    { rule_set: 'geosite-tiktok', outbound: '🌍 国外媒体' },
+                    { rule_set: 'geosite-twitter', outbound: '🌍 国外媒体' },
+                    { rule_set: 'geosite-facebook', outbound: '🌍 国外媒体' },
+                    { rule_set: 'geosite-github', outbound: 'select' },
+                    { rule_set: 'geosite-geolocation-!cn', outbound: 'select' },
+                    { rule_set: 'geosite-cn', outbound: 'direct' },
+                    { rule_set: 'geoip-cn', outbound: 'direct' },
+                    { ip_is_private: true, outbound: 'direct' }
+                ],
+                final: '🐟 漏网之鱼',
+                auto_detect_interface: true
+            },
+            experimental: {
+                cache_file: { enabled: true, store_fakeip: true },
+                clash_api: { external_controller: '127.0.0.1:9090' }
+            }
+        };
+        return JSON.stringify(config, null, 2);
+    }
+
+    // ACL4SSR 规则源（CDN：jsDelivr 镜像 GitHub）
+    const ACL_BASE = 'https://fastly.jsdelivr.net/gh/ACL4SSR/ACL4SSR@master/Clash';
+    const aclRule = (name) => `${ACL_BASE}/${name}.list`;
+
+    // 内部生成 Surge ini (完整 ACL4SSR 规则集；仅 Trojan，Surge 不原生支持 VLESS)
+    function generateSurgeIni(links) {
+        const nodes = links.map(parseShareLink).filter(n => n && n.proto === 'trojan');
+        const dnsServer = customDNS || '223.5.5.5';
+        const names = nodes.map(n => n.name);
+        const lines = [
+            '[General]',
+            'loglevel = notify',
+            'internet-test-url = http://www.apple.com/library/test/success.html',
+            'proxy-test-url = http://www.gstatic.com/generate_204',
+            'test-timeout = 3',
+            `dns-server = ${dnsServer.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}, 119.29.29.29, system`,
+            'encrypted-dns-server = https://223.5.5.5/dns-query, https://1.12.12.12/dns-query',
+            'ipv6 = true',
+            'allow-wifi-access = false',
+            'wifi-access-http-port = 6152',
+            'wifi-access-socks5-port = 6153',
+            'skip-proxy = 127.0.0.1, 192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12, localhost, *.local, captive.apple.com',
+            'exclude-simple-hostnames = true',
+            'show-error-page-for-reject = true',
+            '',
+            '[Proxy]',
+        ];
+        for (const n of nodes) {
+            const sni = n.sni;
+            lines.push(`${n.name} = trojan, ${n.server}, ${n.port}, password=${n.password}, sni=${sni}, ws=true, ws-path=${n.path}, ws-headers=Host:${n.host}, skip-cert-verify=false, tfo=true`);
+        }
+        if (!nodes.length) {
+            lines.push('Direct = direct');
+        }
+        lines.push('');
+        lines.push('[Proxy Group]');
+        const list = names.length ? names.join(', ') : 'DIRECT';
+        lines.push(`🚀 节点选择 = select, 🎯 全球直连, ${list}`);
+        lines.push(`🌍 国外媒体 = select, ${iniPolicyList(names)}`);
+        lines.push(`📺 哔哩哔哩 = select, ${iniPolicyList(names, { directFirst: true })}`);
+        lines.push(`📹 油管视频 = select, ${iniPolicyList(names, { extraGroups: ['🌍 国外媒体'] })}`);
+        lines.push(`🎬 奈飞视频 = select, ${iniPolicyList(names, { extraGroups: ['🌍 国外媒体'] })}`);
+        lines.push(`📲 电报信息 = select, ${iniPolicyList(names)}`);
+        lines.push(`🌐 谷歌服务 = select, ${iniPolicyList(names)}`);
+        lines.push(`🤖 OpenAI = select, ${iniPolicyList(names)}`);
+        lines.push(`Ⓜ️ 微软服务 = select, ${iniPolicyList(names, { directFirst: true })}`);
+        lines.push(`🍎 苹果服务 = select, ${iniPolicyList(names, { directFirst: true })}`);
+        lines.push(`🎯 全球直连 = select, DIRECT`);
+        lines.push(`🛑 全球拦截 = select, REJECT, DIRECT`);
+        lines.push(`🐟 漏网之鱼 = select, ${iniPolicyList(names)}`);
+        lines.push('');
+        lines.push('[Rule]');
+        lines.push(`RULE-SET,${aclRule('LocalAreaNetwork')},🎯 全球直连`);
+        lines.push(`RULE-SET,${aclRule('UnBan')},🎯 全球直连`);
+        lines.push(`RULE-SET,${aclRule('BanAD')},🛑 全球拦截`);
+        lines.push(`RULE-SET,${aclRule('BanProgramAD')},🛑 全球拦截`);
+        lines.push(`RULE-SET,${aclRule('GoogleFCM')},🌐 谷歌服务`);
+        lines.push(`RULE-SET,${aclRule('GoogleCN')},🎯 全球直连`);
+        lines.push(`RULE-SET,${aclRule('SteamCN')},🎯 全球直连`);
+        lines.push(`RULE-SET,${aclRule('Microsoft')},Ⓜ️ 微软服务`);
+        lines.push(`RULE-SET,${aclRule('Apple')},🍎 苹果服务`);
+        lines.push(`RULE-SET,${aclRule('Telegram')},📲 电报信息`);
+        lines.push(`RULE-SET,${aclRule('OpenAi')},🤖 OpenAI`);
+        lines.push(`RULE-SET,${aclRule('Claude')},🤖 OpenAI`);
+        lines.push(`RULE-SET,${aclRule('Copilot')},🤖 OpenAI`);
+        lines.push(`RULE-SET,${aclRule('Netflix')},🌍 国外媒体`);
+        lines.push(`RULE-SET,${aclRule('YouTube')},🌍 国外媒体`);
+        lines.push(`RULE-SET,${aclRule('Disney')},🌍 国外媒体`);
+        lines.push(`RULE-SET,${aclRule('Spotify')},🌍 国外媒体`);
+        lines.push(`RULE-SET,${aclRule('TikTok')},🌍 国外媒体`);
+        lines.push(`RULE-SET,${aclRule('BiliBili')},📺 哔哩哔哩`);
+        lines.push(`RULE-SET,${aclRule('ProxyMedia')},🌍 国外媒体`);
+        lines.push(`RULE-SET,${aclRule('ProxyGFWlist')},🚀 节点选择`);
+        lines.push(`RULE-SET,${aclRule('ChinaDomain')},🎯 全球直连`);
+        lines.push(`RULE-SET,${aclRule('ChinaCompanyIp')},🎯 全球直连`);
+        lines.push(`RULE-SET,${aclRule('ChinaIp')},🎯 全球直连`);
+        lines.push('GEOIP,CN,🎯 全球直连');
+        lines.push('FINAL,🐟 漏网之鱼,dns-failed');
+        return lines.join('\n');
+    }
+
+    // 内部生成 Loon ini (完整 ACL4SSR 规则集；vless + trojan)
+    function generateLoonIni(links) {
+        const nodes = links.map(parseShareLink).filter(n => n && (n.proto === 'vless' || n.proto === 'trojan'));
+        const names = nodes.map(n => n.name);
+        const lines = [
+            '[General]',
+            'ip-mode = dual',
+            `dns-server = ${(customDNS || '223.5.5.5').replace(/^https?:\/\//, '').replace(/\/.*$/, '')},119.29.29.29,system`,
+            'doh-server = https://223.5.5.5/dns-query, https://1.12.12.12/dns-query',
+            'allow-udp-proxy = true',
+            'allow-wifi-access = false',
+            'sni-sniffing = true',
+            'skip-proxy = 127.0.0.1,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,localhost,*.local,captive.apple.com',
+            'bypass-tun = 10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.0.0.0/24,192.0.2.0/24,192.88.99.0/24,192.168.0.0/16,198.51.100.0/24,203.0.113.0/24,224.0.0.0/4,255.255.255.255/32',
+            '',
+            '[Proxy]'
+        ];
+        for (const n of nodes) {
+            if (n.proto === 'vless') {
+                const parts = [`${n.server}`, `${n.port}`, `udp=true`, `username=${n.uuid}`, `transport=ws`, `path=${n.path}`, `host=${n.host}`, `over-tls=${n.tls ? 'true' : 'false'}`];
+                if (n.tls) {
+                    parts.push(`tls-name=${n.sni}`);
+                    if (n.alpn && n.alpn.length) parts.push(`alpn=${n.alpn.join(':')}`);
+                    parts.push(`skip-cert-verify=false`);
+                }
+                lines.push(`${n.name} = vless,${parts.join(',')}`);
+            } else {
+                const parts = [`${n.server}`, `${n.port}`, `password=${n.password}`, `transport=ws`, `path=${n.path}`, `host=${n.host}`, `over-tls=true`, `tls-name=${n.sni}`];
+                if (n.alpn && n.alpn.length) parts.push(`alpn=${n.alpn.join(':')}`);
+                parts.push(`skip-cert-verify=false`);
+                lines.push(`${n.name} = trojan,${parts.join(',')}`);
+            }
+        }
+        lines.push('');
+        lines.push('[Proxy Group]');
+        const list = names.length ? names.join(',') : 'DIRECT';
+        lines.push(`🚀 节点选择 = select,🎯 全球直连,${list}`);
+        lines.push(`🌍 国外媒体 = select,${iniPolicyList(names, { compact: true })}`);
+        lines.push(`📺 哔哩哔哩 = select,${iniPolicyList(names, { directFirst: true, compact: true })}`);
+        lines.push(`📹 油管视频 = select,${iniPolicyList(names, { extraGroups: ['🌍 国外媒体'], compact: true })}`);
+        lines.push(`🎬 奈飞视频 = select,${iniPolicyList(names, { extraGroups: ['🌍 国外媒体'], compact: true })}`);
+        lines.push(`📲 电报信息 = select,${iniPolicyList(names, { compact: true })}`);
+        lines.push(`🌐 谷歌服务 = select,${iniPolicyList(names, { compact: true })}`);
+        lines.push(`🤖 OpenAI = select,${iniPolicyList(names, { compact: true })}`);
+        lines.push(`Ⓜ️ 微软服务 = select,${iniPolicyList(names, { directFirst: true, compact: true })}`);
+        lines.push(`🍎 苹果服务 = select,${iniPolicyList(names, { directFirst: true, compact: true })}`);
+        lines.push(`🎯 全球直连 = select,DIRECT`);
+        lines.push(`🛑 全球拦截 = select,REJECT,DIRECT`);
+        lines.push(`🐟 漏网之鱼 = select,${iniPolicyList(names, { compact: true })}`);
+        lines.push('');
+        lines.push('[Remote Rule]');
+        lines.push(`${aclRule('LocalAreaNetwork')}, policy=🎯 全球直连, tag=局域网, enabled=true`);
+        lines.push(`${aclRule('BanAD')}, policy=🛑 全球拦截, tag=广告拦截, enabled=true`);
+        lines.push(`${aclRule('BanProgramAD')}, policy=🛑 全球拦截, tag=应用广告, enabled=true`);
+        lines.push(`${aclRule('GoogleCN')}, policy=🎯 全球直连, tag=GoogleCN, enabled=true`);
+        lines.push(`${aclRule('SteamCN')}, policy=🎯 全球直连, tag=SteamCN, enabled=true`);
+        lines.push(`${aclRule('Microsoft')}, policy=Ⓜ️ 微软服务, tag=微软, enabled=true`);
+        lines.push(`${aclRule('Apple')}, policy=🍎 苹果服务, tag=苹果, enabled=true`);
+        lines.push(`${aclRule('Telegram')}, policy=📲 电报信息, tag=电报, enabled=true`);
+        lines.push(`${aclRule('OpenAi')}, policy=🤖 OpenAI, tag=OpenAI, enabled=true`);
+        lines.push(`${aclRule('Netflix')}, policy=🌍 国外媒体, tag=Netflix, enabled=true`);
+        lines.push(`${aclRule('YouTube')}, policy=🌍 国外媒体, tag=YouTube, enabled=true`);
+        lines.push(`${aclRule('Disney')}, policy=🌍 国外媒体, tag=Disney, enabled=true`);
+        lines.push(`${aclRule('Spotify')}, policy=🌍 国外媒体, tag=Spotify, enabled=true`);
+        lines.push(`${aclRule('TikTok')}, policy=🌍 国外媒体, tag=TikTok, enabled=true`);
+        lines.push(`${aclRule('BiliBili')}, policy=📺 哔哩哔哩, tag=哔哩哔哩, enabled=true`);
+        lines.push(`${aclRule('ProxyMedia')}, policy=🌍 国外媒体, tag=代理媒体, enabled=true`);
+        lines.push(`${aclRule('ProxyGFWlist')}, policy=🚀 节点选择, tag=代理列表, enabled=true`);
+        lines.push(`${aclRule('ChinaDomain')}, policy=🎯 全球直连, tag=中国域名, enabled=true`);
+        lines.push(`${aclRule('ChinaIp')}, policy=🎯 全球直连, tag=中国IP, enabled=true`);
+        lines.push('');
+        lines.push('[Rule]');
+        lines.push('GEOIP,CN,🎯 全球直连');
+        lines.push('FINAL,🐟 漏网之鱼');
+        return lines.join('\n');
+    }
+
+    // 内部生成 Quantumult X 配置（完整 ACL4SSR 远端 filter 资源）
+    function generateQuanxConf(links) {
+        const nodes = links.map(parseShareLink).filter(n => n && (n.proto === 'vless' || n.proto === 'trojan'));
+        const names = nodes.map(n => n.name);
+        const QX_BASE = 'https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/QuantumultX';
+        const lines = [
+            '[general]',
+            'network_check_url=http://www.gstatic.com/generate_204',
+            'server_check_url=http://www.gstatic.com/generate_204',
+            'profile_img_url=https://fastly.jsdelivr.net/gh/byJoey/cfnew@main/snippets/logo.png',
+            'dns_exclusion_list=*.cmpassport.com, *.jegotrip.com.cn, *.icloud.com, *.icloud.com.cn, *.apple.com, *.weibo.com, *.qq.com',
+            'running_mode_trigger=filter',
+            '',
+            '[dns]',
+            `server=${(customDNS || '223.5.5.5').replace(/^https?:\/\//, '').replace(/\/.*$/, '')}`,
+            'server=119.29.29.29',
+            'server=https://223.5.5.5/dns-query',
+            'server=https://1.12.12.12/dns-query',
+            '',
+            '[server_local]'
+        ];
+        for (const n of nodes) {
+            if (n.proto === 'vless') {
+                const parts = [`${n.server}:${n.port}`, `method=none`, `password=${n.uuid}`, `obfs=${n.tls ? 'wss' : 'ws'}`, `obfs-host=${n.host}`, `obfs-uri=${n.path}`];
+                if (n.tls) parts.push(`tls-verification=true`, `tls13=true`);
+                parts.push(`tag=${n.name}`);
+                lines.push(`vless=${parts.join(', ')}`);
+            } else {
+                const parts = [`${n.server}:${n.port}`, `password=${n.password}`, `over-tls=true`, `tls-host=${n.sni}`, `obfs=wss`, `obfs-host=${n.host}`, `obfs-uri=${n.path}`, `tls-verification=true`, `tag=${n.name}`];
+                lines.push(`trojan=${parts.join(', ')}`);
+            }
+        }
+        lines.push('');
+        lines.push('[policy]');
+        const list = names.length ? names.join(', ') : 'direct';
+        lines.push(`static=🚀 节点选择, ${list}, direct, img-url=https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Proxy.png`);
+        lines.push(`static=🌍 国外媒体, ${iniPolicyList(names)}, img-url=https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/ForeignMedia.png`);
+        lines.push(`static=📺 哔哩哔哩, ${iniPolicyList(names, { directFirst: true })}, img-url=https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/bilibili.png`);
+        lines.push(`static=📹 油管视频, ${iniPolicyList(names, { extraGroups: ['🌍 国外媒体'] })}, img-url=https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/YouTube.png`);
+        lines.push(`static=🎬 奈飞视频, ${iniPolicyList(names, { extraGroups: ['🌍 国外媒体'] })}, img-url=https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Netflix.png`);
+        lines.push(`static=📲 电报信息, ${iniPolicyList(names)}, img-url=https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Telegram.png`);
+        lines.push(`static=🌐 谷歌服务, ${iniPolicyList(names)}, img-url=https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Google.png`);
+        lines.push(`static=🤖 OpenAI, ${iniPolicyList(names)}, img-url=https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/ChatGPT.png`);
+        lines.push(`static=Ⓜ️ 微软服务, ${iniPolicyList(names, { directFirst: true })}, img-url=https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Microsoft.png`);
+        lines.push(`static=🍎 苹果服务, ${iniPolicyList(names, { directFirst: true })}, img-url=https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Apple.png`);
+        lines.push(`static=🎯 全球直连, direct, img-url=https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Direct.png`);
+        lines.push(`static=🛑 全球拦截, reject, direct, img-url=https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Advertising.png`);
+        lines.push(`static=🐟 漏网之鱼, ${iniPolicyList(names)}, img-url=https://fastly.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/Final.png`);
+        lines.push('');
+        lines.push('[filter_remote]');
+        lines.push(`${QX_BASE}/Lan/Lan.list, tag=局域网, force-policy=🎯 全球直连, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push(`${QX_BASE}/Advertising/Advertising.list, tag=广告拦截, force-policy=🛑 全球拦截, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push(`${QX_BASE}/Microsoft/Microsoft.list, tag=微软, force-policy=Ⓜ️ 微软服务, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push(`${QX_BASE}/Apple/Apple.list, tag=苹果, force-policy=🍎 苹果服务, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push(`${QX_BASE}/Telegram/Telegram.list, tag=电报, force-policy=📲 电报信息, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push(`${QX_BASE}/Google/Google.list, tag=谷歌, force-policy=🌐 谷歌服务, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push(`${QX_BASE}/OpenAI/OpenAI.list, tag=OpenAI, force-policy=🤖 OpenAI, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push(`${QX_BASE}/Claude/Claude.list, tag=Claude, force-policy=🤖 OpenAI, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push(`${QX_BASE}/YouTube/YouTube.list, tag=YouTube, force-policy=🌍 国外媒体, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push(`${QX_BASE}/Netflix/Netflix.list, tag=Netflix, force-policy=🌍 国外媒体, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push(`${QX_BASE}/Disney/Disney.list, tag=Disney, force-policy=🌍 国外媒体, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push(`${QX_BASE}/Spotify/Spotify.list, tag=Spotify, force-policy=🌍 国外媒体, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push(`${QX_BASE}/TikTok/TikTok.list, tag=TikTok, force-policy=🌍 国外媒体, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push(`${QX_BASE}/BiliBili/BiliBili.list, tag=哔哩哔哩, force-policy=📺 哔哩哔哩, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push(`${QX_BASE}/Global/Global.list, tag=全球加速, force-policy=🚀 节点选择, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push(`${QX_BASE}/ChinaMax/ChinaMax.list, tag=中国直连, force-policy=🎯 全球直连, update-interval=86400, opt-parser=false, enabled=true`);
+        lines.push('');
+        lines.push('[filter_local]');
+        lines.push('geoip, cn, 🎯 全球直连');
+        lines.push('final, 🐟 漏网之鱼');
+        return lines.join('\n');
+    }
+
+    // 兼容旧调用名
+    async function generateClashConfig(links) {
+        return generateClashYaml(links);
+    }
+    function generateSurgeConfig(links) { return generateSurgeIni(links); }
+    function generateLoonConfig(links) { return generateLoonIni(links); }
+    function generateQuantumultXConfig(links) { return generateQuanxConf(links); }
+    function generateSingBoxConfig(links) { return generateSingBoxJson(links); }
+    function generateSSConfig(links) { return btoa(links.join('\n')); }
+    function generateV2RayConfig(links) { return btoa(links.join('\n')); }
 
     // 全局变量存储ECH调试信息
     let echDebugInfo = '';
@@ -1591,6 +2589,7 @@
         const finalLinks = [];
         const workerDomain = url.hostname;
         const target = url.searchParams.get('target') || 'base64';
+        const aliasNamer = createCompactNodeNamer(false);
 
         // 如果启用了ECH，使用自定义值
         let echConfig = null;
@@ -1602,13 +2601,13 @@
 
         async function addNodesFromList(list) {
             if (ev) {
-                finalLinks.push(...generateLinksFromSource(list, user, workerDomain, echConfig));
+                finalLinks.push(...generateLinksFromSource(list, user, workerDomain, echConfig, false, aliasNamer));
             }
             if (et) {
-                finalLinks.push(...await generateTrojanLinksFromSource(list, user, workerDomain, echConfig));
+                finalLinks.push(...await generateTrojanLinksFromSource(list, user, workerDomain, echConfig, false, aliasNamer));
             }
             if (ex) {
-                finalLinks.push(...generateXhttpLinksFromSource(list, user, workerDomain, echConfig));
+                finalLinks.push(...generateXhttpLinksFromSource(list, user, workerDomain, echConfig, false, aliasNamer));
             }
         }
 
@@ -1681,16 +2680,16 @@
 
             if (egi) {
             try {
-                const newIPList = await fetchAndParseNewIPs();
+                    const newIPList = await fetchAndParseNewIPs();
                 if (newIPList.length > 0) {
                     if (ev) {
-                        finalLinks.push(...generateLinksFromNewIPs(newIPList, user, workerDomain, echConfig));
+                        finalLinks.push(...generateLinksFromNewIPs(newIPList, user, workerDomain, echConfig, false, aliasNamer));
                     }
                     if (et) {
-                        finalLinks.push(...await generateTrojanLinksFromNewIPs(newIPList, user, workerDomain, echConfig));
+                        finalLinks.push(...await generateTrojanLinksFromNewIPs(newIPList, user, workerDomain, echConfig, false, aliasNamer));
                     }
                     if (ex) {
-                         finalLinks.push(...generateXhttpLinksFromSource(newIPList, user, workerDomain, echConfig));
+                         finalLinks.push(...generateXhttpLinksFromSource(newIPList, user, workerDomain, echConfig, false, aliasNamer));
                     }
                 }
             } catch (error) {
@@ -1720,31 +2719,43 @@
         let contentType = 'text/plain; charset=utf-8';
 
         switch (target.toLowerCase()) {
-            case atob('Y2xhc2g='):
-            case atob('Y2xhc2hy'):
-                subscriptionContent = await generateClashConfig(finalLinks, request, user);
+            case atob('Y2xhc2g='):     // clash
+            case atob('Y2xhc2hy'):     // clashr
+            case 'stash':
+            case 'meta':
+            case 'clashmeta':
+                subscriptionContent = generateClashYaml(finalLinks);
                 contentType = 'text/yaml; charset=utf-8';
                 break;
-            case atob('c3VyZ2U='):
+            case atob('c3VyZ2U='):     // surge
             case atob('c3VyZ2Uy'):
             case atob('c3VyZ2Uz'):
             case atob('c3VyZ2U0'):
-                subscriptionContent = generateSurgeConfig(finalLinks);
+                subscriptionContent = generateSurgeIni(finalLinks);
+                contentType = 'text/plain; charset=utf-8';
                 break;
-            case atob('cXVhbnR1bXVsdA=='):
-            case atob('cXVhbng='):
+            case atob('cXVhbnR1bXVsdA=='):  // quantumult
+            case atob('cXVhbng='):          // quanx
             case 'quanx':
-                subscriptionContent = generateQuantumultConfig(finalLinks);
+                subscriptionContent = generateQuanxConf(finalLinks);
+                contentType = 'text/plain; charset=utf-8';
                 break;
             case atob('c3M='):
             case atob('c3Ny'):
-                subscriptionContent = generateSSConfig(finalLinks);
+                subscriptionContent = btoa(finalLinks.join('\n'));
                 break;
             case atob('djJyYXk='):
-                subscriptionContent = generateV2RayConfig(finalLinks);
+                subscriptionContent = btoa(finalLinks.join('\n'));
                 break;
             case atob('bG9vbg=='):
-                subscriptionContent = generateLoonConfig(finalLinks);
+                subscriptionContent = generateLoonIni(finalLinks);
+                contentType = 'text/plain; charset=utf-8';
+                break;
+            case atob('c2luZ2JveA=='):  // singbox
+            case 'sing-box':
+            case 'singbox':
+                subscriptionContent = generateSingBoxJson(finalLinks);
+                contentType = 'application/json; charset=utf-8';
                 break;
             default:
                 subscriptionContent = btoa(finalLinks.join('\n'));
@@ -1768,7 +2779,7 @@
         });
     }
 
-    function generateLinksFromSource(list, user, workerDomain, echConfig = null, skipNumbering = false) {
+    function generateLinksFromSource(list, user, workerDomain, echConfig = null, skipNumbering = false, aliasNamer = null) {
         const CF_HTTP_PORTS = [80, 8080, 8880, 2052, 2082, 2086, 2095];
         const CF_HTTPS_PORTS = [443, 2053, 2083, 2087, 2096, 8443];
 
@@ -1778,13 +2789,9 @@
         const wsPath = '/?ed=2048';
         const proto = atob('dmxlc3M=');
 
-        const { namer, setSkipNumbering } = createNodeNamer(skipNumbering);
+        const makeNodeName = aliasNamer || createCompactNodeNamer(skipNumbering);
 
         for (const item of list) {
-            let nodeNameBase = item.isp.replace(/\s/g, '_');
-            if (item.colo && item.colo.trim()) {
-                nodeNameBase = `${nodeNameBase}-${item.colo.trim()}`;
-            }
             const safeIP = item.ip.includes(':') ? `[${item.ip}]` : item.ip;
 
             let portsToGenerate = [];
@@ -1809,14 +2816,7 @@
             }
 
             for (const { port, tls } of portsToGenerate) {
-                const suffix = tls ? '-WS-TLS' : '-WS';
-                const nodeName = `${nodeNameBase}-${port}${suffix}`;
-                let wsNodeName;
-                if (skipNumbering) {
-                    wsNodeName = nodeName;           // 不编号
-                } else {
-                    wsNodeName = namer(nodeNameBase, nodeName);  // 编号
-                }
+                const wsNodeName = makeNodeName(item);
 
                 if (tls) {
                     const wsParams = new URLSearchParams({ 
@@ -1828,12 +2828,12 @@
                         host: workerDomain, 
                         path: wsPath
                     });
+                    applyALPNParam(wsParams);
 
                     // 如果启用了ECH，添加ech参数（ECH需要伪装成Chrome浏览器）
                     if (enableECH) {
                         const dnsServer = customDNS || 'https://223.5.5.5/dns-query';
                         const echDomain = customECHDomain || 'cloudflare-ech.com';
-                        wsParams.set('alpn', 'h3');
                         wsParams.set('ech', `${echDomain}+${dnsServer}`);
                     }
 
@@ -1854,7 +2854,7 @@
         return links;
     }
 
-    async function generateTrojanLinksFromSource(list, user, workerDomain, echConfig = null, skipNumbering = false) {
+    async function generateTrojanLinksFromSource(list, user, workerDomain, echConfig = null, skipNumbering = false, aliasNamer = null) {
         const CF_HTTP_PORTS = [80, 8080, 8880, 2052, 2082, 2086, 2095];
         const CF_HTTPS_PORTS = [443, 2053, 2083, 2087, 2096, 8443];
 
@@ -1865,13 +2865,9 @@
 
         const password = tp || user;
 
-        const { namer, setSkipNumbering } = createNodeNamer(skipNumbering);
+        const makeNodeName = aliasNamer || createCompactNodeNamer(skipNumbering);
 
         for (const item of list) {
-            let nodeNameBase = item.isp.replace(/\s/g, '_');
-            if (item.colo && item.colo.trim()) {
-                nodeNameBase = `${nodeNameBase}-${item.colo.trim()}`;
-            }
             const safeIP = item.ip.includes(':') ? `[${item.ip}]` : item.ip;
 
             let portsToGenerate = [];
@@ -1896,14 +2892,7 @@
             }
 
             for (const { port, tls } of portsToGenerate) {
-                const suffix = tls ? `-${atob('VHJvamFu')}-WS-TLS` : `-${atob('VHJvamFu')}-WS`;
-                const nodeName = `${nodeNameBase}-${port}${suffix}`;
-                let wsNodeName;
-                if (skipNumbering) {
-                    wsNodeName = nodeName;           // 不编号
-                } else {
-                    wsNodeName = namer(nodeNameBase, nodeName);  // 编号
-                }
+                const wsNodeName = makeNodeName(item);
 
                 if (tls) {
                     const wsParams = new URLSearchParams({ 
@@ -1914,12 +2903,12 @@
                         host: workerDomain, 
                         path: wsPath
                     });
+                    applyALPNParam(wsParams);
 
                     // 如果启用了ECH，添加ech参数（ECH需要伪装成Chrome浏览器）
                     if (enableECH) {
                         const dnsServer = customDNS || 'https://223.5.5.5/dns-query';
                         const echDomain = customECHDomain || 'cloudflare-ech.com';
-                        wsParams.set('alpn', 'h3');
                         wsParams.set('ech', `${echDomain}+${dnsServer}`);
                     }
 
@@ -2052,27 +3041,84 @@
         const wsPair = new WebSocketPair();
         const [clientSock, serverSock] = Object.values(wsPair);
         serverSock.accept();
+        serverSock.binaryType = 'arraybuffer';
 
-        let remoteConnWrapper = { socket: null };
+        let remoteConnWrapper = { socket: null, writer: null, drainUpload: null };
         let isDnsQuery = false;
         let protocolType = null; 
+        let uploadBusy = false;
+        let transportClosed = false;
+        const uploadQueue = createChunkQueue(TRANSPORT_UP_PACK, TRANSPORT_UP_Q_MAX, TRANSPORT_UP_Q_MAX >> 8);
+        const requestFetcher = request.fetcher;
+
+        function releaseRemoteWriter() {
+            try { remoteConnWrapper.writer?.releaseLock(); } catch (_) {}
+            remoteConnWrapper.writer = null;
+        }
+
+        function closeTransport() {
+            if (transportClosed) return;
+            transportClosed = true;
+            uploadQueue.clear();
+            releaseRemoteWriter();
+            try { remoteConnWrapper.socket?.close(); } catch (_) {}
+            closeSocketQuietly(serverSock);
+        }
+
+        function queueUpload(chunk) {
+            const data = toUint8Array(chunk);
+            if (!data.byteLength) return true;
+            if (!uploadQueue.sow(data)) {
+                closeTransport();
+                return false;
+            }
+            remoteConnWrapper.drainUpload();
+            return true;
+        }
+
+        async function drainUpload() {
+            if (uploadBusy || transportClosed || !remoteConnWrapper.writer) return;
+            uploadBusy = true;
+            try {
+                for (;;) {
+                    if (transportClosed || !remoteConnWrapper.writer) break;
+                    const [data] = uploadQueue.bundle();
+                    if (!data) break;
+                    await remoteConnWrapper.writer.write(data);
+                }
+            } catch (_) {
+                closeTransport();
+            } finally {
+                uploadBusy = false;
+                if (!uploadQueue.empty && !transportClosed && remoteConnWrapper.writer) queueMicrotask(drainUpload);
+            }
+        }
+
+        remoteConnWrapper.drainUpload = () => {
+            if (!uploadBusy && !uploadQueue.empty && remoteConnWrapper.writer) queueMicrotask(drainUpload);
+        };
 
         const earlyData = request.headers.get(atob('c2VjLXdlYnNvY2tldC1wcm90b2NvbA==')) || '';
         const readable = makeReadableStream(serverSock, earlyData);
 
         readable.pipeTo(new WritableStream({
             async write(chunk) {
-                if (isDnsQuery) return await forwardUDP(chunk, serverSock, null);
-                if (remoteConnWrapper.socket) {
-                    const writer = remoteConnWrapper.socket.writable.getWriter();
-                    await writer.write(chunk);
-                    writer.releaseLock();
+                if (transportClosed) return;
+                const data = toUint8Array(chunk);
+                if (isDnsQuery) return await forwardUDP(data, serverSock, null, requestFetcher);
+                if (remoteConnWrapper.socket && remoteConnWrapper.writer) {
+                    if (!queueUpload(data)) throw new Error('upload queue overflow');
+                    return;
+                }
+
+                if (protocolType) {
+                    if (!queueUpload(data)) throw new Error('upload queue overflow');
                     return;
                 }
 
                 if (!protocolType) {
-                    if (ev && chunk.byteLength >= 24) {
-                        const vlessResult = parseWsPacketHeader(chunk, at);
+                    if (ev && data.byteLength >= 24) {
+                        const vlessResult = parseWsPacketHeader(data, at);
                         if (!vlessResult.hasError) {
                             protocolType = 'vless';
                             const { addressType, port, hostname, rawIndex, version, isUDP } = vlessResult;
@@ -2081,19 +3127,19 @@
                     else throw new Error(E_UDP_DNS_ONLY);
                 }
                 const respHeader = new Uint8Array([version[0], 0]);
-                const rawData = chunk.slice(rawIndex);
-                if (isDnsQuery) return forwardUDP(rawData, serverSock, respHeader);
-                    await forwardTCP(addressType, hostname, port, rawData, serverSock, respHeader, remoteConnWrapper, reqFallback, effectiveRegion, reqRm, reqSocksConfig);
+                const rawData = data.subarray(rawIndex);
+                if (isDnsQuery) return forwardUDP(rawData, serverSock, respHeader, requestFetcher);
+                    await forwardTCP(addressType, hostname, port, rawData, serverSock, respHeader, remoteConnWrapper, reqFallback, effectiveRegion, reqRm, reqSocksConfig, requestFetcher);
                             return;
                         }
                     }
 
-                    if (et && chunk.byteLength >= 56) {
-                        const tjResult = await parseTrojanHeader(chunk, at);
+                    if (et && data.byteLength >= 56) {
+                        const tjResult = await parseTrojanHeader(data, at);
                         if (!tjResult.hasError) {
                             protocolType = atob('dHJvamFu');
                             const { addressType, port, hostname, rawClientData } = tjResult;
-                            await forwardTCP(addressType, hostname, port, rawClientData, serverSock, null, remoteConnWrapper, reqFallback, effectiveRegion, reqRm, reqSocksConfig);
+                            await forwardTCP(addressType, hostname, port, rawClientData, serverSock, null, remoteConnWrapper, reqFallback, effectiveRegion, reqRm, reqSocksConfig, requestFetcher);
                             return;
                         }
                     }
@@ -2101,36 +3147,61 @@
                     throw new Error('Invalid protocol or authentication failed');
                 }
             },
-        })).catch((err) => { });
+        })).catch((err) => { closeTransport(); });
 
         return new Response(null, { status: 101, webSocket: clientSock });
     }
 
-    async function forwardTCP(addrType, host, portNum, rawData, ws, respHeader, remoteConnWrapper, reqFallback = '', reqRegion = '', reqRm = null, reqSocksConfig = null) {
+    async function forwardTCP(addrType, host, portNum, rawData, ws, respHeader, remoteConnWrapper, reqFallback = '', reqRegion = '', reqRm = null, reqSocksConfig = null, requestFetcher = null) {
         // 优先使用客户端path参数，其次回退到全局配置
         const effectiveFallback = reqFallback || fallbackAddress;
         const effectiveRegion = reqRegion || currentWorkerRegion;
         const effectiveRegionMatching = reqRm !== null ? reqRm : enableRegionMatching;
         const effectiveSocksConfig = reqSocksConfig || parsedSocks5Config;
         const effectiveSocksEnabled = reqSocksConfig ? true : isSocksEnabled;
+        const initialData = toUint8Array(rawData);
 
         async function connectAndSend(address, port, useSocks = false) {
             const remoteSock = useSocks ?
                 await establishSocksConnection(addrType, address, port, effectiveSocksConfig) :
-                connect({ hostname: address, port: port });
+                await connectTcpSocket(address, port, requestFetcher, TRANSPORT_CONNECT_RACE);
             const writer = remoteSock.writable.getWriter();
-            await writer.write(rawData);
-            writer.releaseLock();
-            return remoteSock;
+            if (initialData.byteLength) await writer.write(initialData);
+            return { remoteSock, writer };
+        }
+
+        function detachIfCurrent(remoteSock, writer) {
+            if (remoteConnWrapper.socket !== remoteSock) return;
+            try { writer?.releaseLock(); } catch (_) {}
+            remoteConnWrapper.socket = null;
+            remoteConnWrapper.writer = null;
+        }
+
+        function attachRemote(remoteSock, writer, retryFunc) {
+            try {
+                if (remoteConnWrapper.writer && remoteConnWrapper.writer !== writer) {
+                    remoteConnWrapper.writer.releaseLock();
+                }
+            } catch (_) {}
+            remoteConnWrapper.socket = remoteSock;
+            remoteConnWrapper.writer = writer;
+            remoteConnWrapper.drainUpload?.();
+            remoteSock.closed.catch(() => {}).finally(() => {
+                if (remoteConnWrapper.socket === remoteSock) closeSocketQuietly(ws);
+            });
+            connectStreams(remoteSock, ws, respHeader, retryFunc).finally(() => {
+                if (remoteConnWrapper.socket === remoteSock) {
+                    try { writer.releaseLock(); } catch (_) {}
+                    remoteConnWrapper.writer = null;
+                }
+            });
         }
 
         async function retryConnection() {
             if (enableSocksDowngrade && effectiveSocksEnabled) {
                 try {
-                    const socksSocket = await connectAndSend(host, portNum, true);
-                    remoteConnWrapper.socket = socksSocket;
-                    socksSocket.closed.catch(() => {}).finally(() => closeSocketQuietly(ws));
-                    connectStreams(socksSocket, ws, respHeader, null);
+                    const { remoteSock: socksSocket, writer: socksWriter } = await connectAndSend(host, portNum, true);
+                    attachRemote(socksSocket, socksWriter, null);
                     return;
                 } catch (socksErr) {
                     let backupHost, backupPort;
@@ -2145,10 +3216,8 @@
                     }
 
                     try {
-                        const fallbackSocket = await connectAndSend(backupHost, backupPort, false);
-                        remoteConnWrapper.socket = fallbackSocket;
-                        fallbackSocket.closed.catch(() => {}).finally(() => closeSocketQuietly(ws));
-                        connectStreams(fallbackSocket, ws, respHeader, null);
+                        const { remoteSock: fallbackSocket, writer: fallbackWriter } = await connectAndSend(backupHost, backupPort, false);
+                        attachRemote(fallbackSocket, fallbackWriter, null);
                     } catch (fallbackErr) {
                         closeSocketQuietly(ws);
                     }
@@ -2166,10 +3235,8 @@
                 }
 
                 try {
-                    const fallbackSocket = await connectAndSend(backupHost, backupPort, effectiveSocksEnabled);
-                    remoteConnWrapper.socket = fallbackSocket;
-                    fallbackSocket.closed.catch(() => {}).finally(() => closeSocketQuietly(ws));
-                    connectStreams(fallbackSocket, ws, respHeader, null);
+                    const { remoteSock: fallbackSocket, writer: fallbackWriter } = await connectAndSend(backupHost, backupPort, effectiveSocksEnabled);
+                    attachRemote(fallbackSocket, fallbackWriter, null);
                 } catch (fallbackErr) {
                     closeSocketQuietly(ws);
                 }
@@ -2177,30 +3244,266 @@
         }
         
         try {
-            const initialSocket = await connectAndSend(host, portNum, enableSocksDowngrade ? false : effectiveSocksEnabled);
-            remoteConnWrapper.socket = initialSocket;
-            connectStreams(initialSocket, ws, respHeader, retryConnection);
+            const { remoteSock: initialSocket, writer: initialWriter } = await connectAndSend(host, portNum, enableSocksDowngrade ? false : effectiveSocksEnabled);
+            attachRemote(initialSocket, initialWriter, () => {
+                detachIfCurrent(initialSocket, initialWriter);
+                retryConnection();
+            });
         } catch (err) {
-            retryConnection();
+            await retryConnection();
         }
     }
 
+    function toUint8Array(chunk) {
+        if (chunk instanceof Uint8Array) return chunk;
+        if (chunk instanceof ArrayBuffer) return new Uint8Array(chunk);
+        if (ArrayBuffer.isView(chunk)) return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+        return new Uint8Array(chunk);
+    }
+
+    function joinUint8Array(head, body) {
+        const h = toUint8Array(head);
+        const b = toUint8Array(body);
+        const out = new Uint8Array(h.byteLength + b.byteLength);
+        out.set(h);
+        out.set(b, h.byteLength);
+        return out;
+    }
+
+    function createChunkQueue(cap, qCap = cap, itemsMax = Math.max(1, qCap >> 8)) {
+        let queue = [];
+        let head = 0;
+        let queuedBytes = 0;
+        let bundleBuffer = null;
+
+        function trim() {
+            if (head > 32 && head * 2 >= queue.length) {
+                queue = queue.slice(head);
+                head = 0;
+            }
+        }
+
+        function take() {
+            if (head >= queue.length) return null;
+            const data = queue[head];
+            queue[head++] = undefined;
+            queuedBytes -= data.byteLength;
+            trim();
+            return data;
+        }
+
+        return {
+            get empty() { return head >= queue.length; },
+            clear() {
+                queue = [];
+                head = 0;
+                queuedBytes = 0;
+            },
+            sow(data) {
+                const n = data?.byteLength || 0;
+                if (!n) return true;
+                if (queuedBytes + n > qCap || queue.length - head >= itemsMax) return false;
+                queue.push(data);
+                queuedBytes += n;
+                return true;
+            },
+            bundle(data = null) {
+                data ||= take();
+                if (!data || head >= queue.length || data.byteLength >= cap) return [data, false];
+                let total = data.byteLength;
+                let end = head;
+                while (end < queue.length) {
+                    const next = queue[end];
+                    const nextTotal = total + next.byteLength;
+                    if (nextTotal > cap) break;
+                    total = nextTotal;
+                    end++;
+                }
+                if (end === head) return [data, false];
+                const out = bundleBuffer ||= new Uint8Array(cap);
+                out.set(data);
+                let offset = data.byteLength;
+                while (head < end) {
+                    const next = queue[head];
+                    queue[head++] = undefined;
+                    queuedBytes -= next.byteLength;
+                    out.set(next, offset);
+                    offset += next.byteLength;
+                }
+                trim();
+                return [out.subarray(0, total), true];
+            }
+        };
+    }
+
+    function createDownlinkGrain(webSocket) {
+        const cap = TRANSPORT_DN_PACK;
+        const tail = TRANSPORT_DN_TAIL;
+        const lowWater = Math.max(4096, tail << 3);
+        let pending = new Uint8Array(cap);
+        let pendingBytes = 0;
+        let timer = 0;
+        let microtaskQueued = false;
+        let generation = 0;
+        let quietKey = 0;
+        let quietRounds = 0;
+
+        function flush() {
+            if (timer) clearTimeout(timer);
+            timer = 0;
+            microtaskQueued = false;
+            if (!pendingBytes) return;
+            if (webSocket.readyState === 1) webSocket.send(pending.subarray(0, pendingBytes).slice());
+            pending = new Uint8Array(cap);
+            pendingBytes = 0;
+            quietRounds = 0;
+        }
+
+        function schedule() {
+            if (timer || microtaskQueued) return;
+            microtaskQueued = true;
+            quietKey = generation;
+            queueMicrotask(() => {
+                microtaskQueued = false;
+                if (!pendingBytes || timer) return;
+                if (cap - pendingBytes < tail) return flush();
+                timer = setTimeout(() => {
+                    timer = 0;
+                    if (!pendingBytes) return;
+                    if (cap - pendingBytes < tail) return flush();
+                    if (quietRounds < 2 && (generation !== quietKey || pendingBytes < lowWater)) {
+                        quietRounds++;
+                        quietKey = generation;
+                        return schedule();
+                    }
+                    flush();
+                }, Math.max(TRANSPORT_DN_DELAY, 1));
+            });
+        }
+
+        return {
+            send(chunk) {
+                const data = toUint8Array(chunk);
+                let offset = 0;
+                const total = data.byteLength;
+                if (!total) return;
+                while (offset < total) {
+                    if (!pendingBytes && total - offset >= cap) {
+                        const size = Math.min(cap, total - offset);
+                        if (webSocket.readyState === 1) webSocket.send(offset || size !== total ? data.subarray(offset, offset + size) : data);
+                        offset += size;
+                        continue;
+                    }
+                    const size = Math.min(cap - pendingBytes, total - offset);
+                    pending.set(data.subarray(offset, offset + size), pendingBytes);
+                    pendingBytes += size;
+                    offset += size;
+                    generation++;
+                    if (pendingBytes === cap || cap - pendingBytes < tail) flush();
+                    else schedule();
+                }
+            },
+            flush
+        };
+    }
+
+    function openTcpSocket(address, port, requestFetcher = null) {
+        const target = { hostname: address, port };
+        if (requestFetcher && typeof requestFetcher.connect === 'function') return requestFetcher.connect(target);
+        return connect(target);
+    }
+
+    async function openTcpSocketReady(address, port, requestFetcher = null) {
+        try {
+            const socket = openTcpSocket(address, port, requestFetcher);
+            if (socket?.opened) await socket.opened;
+            return socket;
+        } catch (error) {
+            if (!requestFetcher) throw error;
+            const socket = connect({ hostname: address, port });
+            if (socket?.opened) await socket.opened;
+            return socket;
+        }
+    }
+
+    async function connectTcpSocket(address, port, requestFetcher = null, raceCount = 1) {
+        const count = Math.max(1, raceCount | 0);
+        if (count <= 1) return openTcpSocketReady(address, port, requestFetcher);
+        const attempts = Array.from({ length: count }, () => openTcpSocketReady(address, port, requestFetcher));
+        const winner = await Promise.any(attempts);
+        attempts.forEach((attempt) => {
+            attempt.then((socket) => {
+                if (socket !== winner) {
+                    try { socket.close(); } catch (_) {}
+                }
+            }, () => {});
+        });
+        return winner;
+    }
+
+    function getUuidBytes(token) {
+        if (uuidByteCache.has(token)) return uuidByteCache.get(token);
+        const hex = String(token || '').replace(/-/g, '');
+        if (hex.length !== 32) return null;
+        const bytes = new Uint8Array(16);
+        for (let i = 0; i < 16; i++) {
+            const value = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+            if (Number.isNaN(value)) return null;
+            bytes[i] = value;
+        }
+        if (uuidByteCache.size > 16) uuidByteCache.clear();
+        uuidByteCache.set(token, bytes);
+        return bytes;
+    }
+
+    function matchesUuid(bytes, offset, token) {
+        const id = getUuidBytes(token);
+        return !!id &&
+            bytes[offset] === id[0] && bytes[offset + 1] === id[1] &&
+            bytes[offset + 2] === id[2] && bytes[offset + 3] === id[3] &&
+            bytes[offset + 4] === id[4] && bytes[offset + 5] === id[5] &&
+            bytes[offset + 6] === id[6] && bytes[offset + 7] === id[7] &&
+            bytes[offset + 8] === id[8] && bytes[offset + 9] === id[9] &&
+            bytes[offset + 10] === id[10] && bytes[offset + 11] === id[11] &&
+            bytes[offset + 12] === id[12] && bytes[offset + 13] === id[13] &&
+            bytes[offset + 14] === id[14] && bytes[offset + 15] === id[15];
+    }
+
     function parseWsPacketHeader(chunk, token) {
-        if (chunk.byteLength < 24) return { hasError: true, message: E_INVALID_DATA };
-        const version = new Uint8Array(chunk.slice(0, 1));
-        if (formatIdentifier(new Uint8Array(chunk.slice(1, 17))) !== token) return { hasError: true, message: E_INVALID_USER };
-        const optLen = new Uint8Array(chunk.slice(17, 18))[0];
-        const cmd = new Uint8Array(chunk.slice(18 + optLen, 19 + optLen))[0];
+        const bytes = toUint8Array(chunk);
+        if (bytes.byteLength < 24) return { hasError: true, message: E_INVALID_DATA };
+        const version = bytes.subarray(0, 1);
+        if (!matchesUuid(bytes, 1, token)) return { hasError: true, message: E_INVALID_USER };
+        const optLen = bytes[17];
+        const cmdIdx = 18 + optLen;
+        if (bytes.byteLength < cmdIdx + 5) return { hasError: true, message: E_INVALID_DATA };
+        const cmd = bytes[cmdIdx];
         let isUDP = false;
         if (cmd === 1) {} else if (cmd === 2) { isUDP = true; } else { return { hasError: true, message: E_UNSUPPORTED_CMD }; }
         const portIdx = 19 + optLen;
-        const port = new DataView(chunk.slice(portIdx, portIdx + 2)).getUint16(0);
+        const port = (bytes[portIdx] << 8) | bytes[portIdx + 1];
         let addrIdx = portIdx + 2, addrLen = 0, addrValIdx = addrIdx + 1, hostname = '';
-        const addressType = new Uint8Array(chunk.slice(addrIdx, addrValIdx))[0];
+        const addressType = bytes[addrIdx];
         switch (addressType) {
-            case ADDRESS_TYPE_IPV4: addrLen = 4; hostname = new Uint8Array(chunk.slice(addrValIdx, addrValIdx + addrLen)).join('.'); break;
-            case ADDRESS_TYPE_URL: addrLen = new Uint8Array(chunk.slice(addrValIdx, addrValIdx + 1))[0]; addrValIdx += 1; hostname = new TextDecoder().decode(chunk.slice(addrValIdx, addrValIdx + addrLen)); break;
-            case ADDRESS_TYPE_IPV6: addrLen = 16; const ipv6 = []; const ipv6View = new DataView(chunk.slice(addrValIdx, addrValIdx + addrLen)); for (let i = 0; i < 8; i++) ipv6.push(ipv6View.getUint16(i * 2).toString(16)); hostname = ipv6.join(':'); break;
+            case ADDRESS_TYPE_IPV4:
+                addrLen = 4;
+                if (bytes.byteLength < addrValIdx + addrLen) return { hasError: true, message: E_INVALID_DATA };
+                hostname = `${bytes[addrValIdx]}.${bytes[addrValIdx + 1]}.${bytes[addrValIdx + 2]}.${bytes[addrValIdx + 3]}`;
+                break;
+            case ADDRESS_TYPE_URL:
+                if (bytes.byteLength < addrValIdx + 1) return { hasError: true, message: E_INVALID_DATA };
+                addrLen = bytes[addrValIdx++];
+                if (bytes.byteLength < addrValIdx + addrLen) return { hasError: true, message: E_INVALID_DATA };
+                hostname = sharedDecoder.decode(bytes.subarray(addrValIdx, addrValIdx + addrLen));
+                break;
+            case ADDRESS_TYPE_IPV6:
+                addrLen = 16;
+                if (bytes.byteLength < addrValIdx + addrLen) return { hasError: true, message: E_INVALID_DATA };
+                const ipv6 = [];
+                const ipv6View = new DataView(bytes.buffer, bytes.byteOffset + addrValIdx, addrLen);
+                for (let i = 0; i < 8; i++) ipv6.push(ipv6View.getUint16(i * 2).toString(16));
+                hostname = ipv6.join(':');
+                break;
             default: return { hasError: true, message: `${E_INVALID_ADDR_TYPE}: ${addressType}` };
         }
         if (!hostname) return { hasError: true, message: `${E_EMPTY_ADDR}: ${addressType}` };
@@ -2211,47 +3514,95 @@
         let cancelled = false;
         return new ReadableStream({
             start(controller) {
-                socket.addEventListener('message', (event) => { if (!cancelled) controller.enqueue(event.data); });
+                socket.addEventListener('message', (event) => { if (!cancelled) controller.enqueue(toUint8Array(event.data)); });
                 socket.addEventListener('close', () => { if (!cancelled) { closeSocketQuietly(socket); controller.close(); } });
                 socket.addEventListener('error', (err) => controller.error(err));
                 const { earlyData, error } = base64ToArray(earlyDataHeader);
-                if (error) controller.error(error); else if (earlyData) controller.enqueue(earlyData);
+                if (error) controller.error(error); else if (earlyData) controller.enqueue(toUint8Array(earlyData));
             },
             cancel() { cancelled = true; closeSocketQuietly(socket); }
         });
     }
 
     async function connectStreams(remoteSocket, webSocket, headerData, retryFunc) {
-        let header = headerData, hasData = false;
-        await remoteSocket.readable.pipeTo(
-            new WritableStream({
-                async write(chunk, controller) {
+        let header = headerData, hasData = false, retried = false;
+
+        // 关键：CF 直连有时握手成功但远端长时间无数据，需要超时触发 SOCKS5 降级
+        let firstByteTimer = null;
+        if (retryFunc) {
+            firstByteTimer = setTimeout(() => {
+                if (!hasData && !retried) {
+                    retried = true;
+                    try { remoteSocket.close && remoteSocket.close(); } catch (_) {}
+                    retryFunc();
+                }
+            }, FIRST_BYTE_TIMEOUT);
+        }
+
+        const tx = createDownlinkGrain(webSocket);
+        let reader = null;
+        let byob = true;
+        let buffer = new ArrayBuffer(TRANSPORT_CHUNK_SIZE);
+
+        try {
+            try {
+                reader = remoteSocket.readable.getReader({ mode: 'byob' });
+            } catch (_) {
+                byob = false;
+                reader = remoteSocket.readable.getReader();
+            }
+
+            for (;;) {
+                const result = byob ? await reader.read(new Uint8Array(buffer, 0, TRANSPORT_CHUNK_SIZE)) : await reader.read();
+                if (result.done) break;
+                const readValue = result.value;
+                let chunk = toUint8Array(readValue);
+                const reusableBuffer = byob && readValue?.buffer instanceof ArrayBuffer && readValue.buffer.byteLength >= TRANSPORT_CHUNK_SIZE
+                    ? readValue.buffer
+                    : new ArrayBuffer(TRANSPORT_CHUNK_SIZE);
+                if (!chunk.byteLength) continue;
+
+                if (!hasData) {
                     hasData = true;
-                    if (webSocket.readyState !== 1) controller.error(E_WS_NOT_OPEN);
-                    if (header) { webSocket.send(await new Blob([header, chunk]).arrayBuffer()); header = null; } 
-                    else { webSocket.send(chunk); }
-                },
-                abort(reason) { },
-            })
-        ).catch((error) => { closeSocketQuietly(webSocket); });
-        if (!hasData && retryFunc) retryFunc();
+                    if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null; }
+                }
+
+                if (webSocket.readyState !== 1) throw new Error(E_WS_NOT_OPEN);
+                if (header) {
+                    chunk = joinUint8Array(header, chunk);
+                    header = null;
+                }
+
+                if (chunk.byteLength >= (TRANSPORT_CHUNK_SIZE >> 1)) {
+                    tx.flush();
+                    webSocket.send(chunk);
+                    if (byob) buffer = new ArrayBuffer(TRANSPORT_CHUNK_SIZE);
+                } else {
+                    tx.send(chunk.slice());
+                    if (byob) buffer = reusableBuffer;
+                }
+            }
+            tx.flush();
+        } catch (error) {
+            // 已经触发 retry 时不要关闭 WS（retry 会重新挂载新 socket）
+            if (!retried) closeSocketQuietly(webSocket);
+        } finally {
+            try { tx.flush(); } catch (_) {}
+            try { reader?.releaseLock(); } catch (_) {}
+        }
+
+        if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null; }
+        if (!hasData && !retried && retryFunc) retryFunc();
     }
 
-    async function forwardUDP(udpChunk, webSocket, respHeader) {
+    async function forwardUDP(udpChunk, webSocket, respHeader, requestFetcher = null) {
         try {
-            const tcpSocket = connect({ hostname: '8.8.4.4', port: 53 });
+            const tcpSocket = await connectTcpSocket('8.8.4.4', 53, requestFetcher, 1);
             let header = respHeader;
             const writer = tcpSocket.writable.getWriter();
             await writer.write(udpChunk);
             writer.releaseLock();
-            await tcpSocket.readable.pipeTo(new WritableStream({
-                async write(chunk) {
-                    if (webSocket.readyState === 1) {
-                        if (header) { webSocket.send(await new Blob([header, chunk]).arrayBuffer()); header = null; } 
-                        else { webSocket.send(chunk); }
-                    }
-                },
-            }));
+            await connectStreams(tcpSocket, webSocket, header, null);
         } catch (error) { }
     }
 
@@ -2402,7 +3753,7 @@
                 enablePreferredDomain: '启用优选域名',
                 enablePreferredIP: '启用优选 IP',
                 enableNativeAddress: '启用原生地址',
-                enableGitHubPreferred: '启用 GitHub 默认优选',
+                enableGitHubPreferred: '启用自定义优选',
                 allowAPIManagement: '允许API管理 (ae):',
                 regionMatching: '地区匹配 (rm):',
                 downgradeControl: '降级控制 (qj):',
@@ -2426,9 +3777,12 @@
                 customECHDomain: '自定义 ECH 域名',
                 customECHDomainPlaceholder: '例如: cloudflare-ech.com',
                 customECHDomainHint: 'ECH配置中使用的域名，留空则使用默认值',
+                alpn: 'TLS ALPN',
+                alpnDefault: '默认（留空，由客户端协商）',
+                alpnHint: '仅添加到 TLS 节点链接参数；留空则不写 alpn。',
                 saveProtocol: '保存协议配置',
                 subscriptionConverterPlaceholder: '默认: https://url.v1.mk/sub',
-                subscriptionConverterHint: '自定义订阅转换API地址，留空则使用默认地址',
+                subscriptionConverterHint: '订阅转换已内部实现，无需外部 API。此项仅作兼容保留，可留空。',
                 builtinPreferredHint: '控制订阅中包含哪些内置优选节点。默认全部启用。',
                 apiEnabledDefault: '默认（关闭API）',
                 apiEnabledYes: '开启API管理',
@@ -2450,7 +3804,7 @@
                     KR: '🇰🇷 韩国', DE: '🇩🇪 德国', SE: '🇸🇪 瑞典', NL: '🇳🇱 荷兰',
                     FI: '🇫🇮 芬兰', GB: '🇬🇧 英国'
                 },
-                terminal: '终端 v2.9.6',
+                terminal: '终端 v2.9.8',
                 githubProject: 'GitHub 项目',
                 autoDetectClient: '自动识别',
                 selectionLogicText: '同地区 → 邻近地区 → 其他地区',
@@ -2550,7 +3904,7 @@
                 enablePreferredDomain: 'فعال‌سازی دامنه ترجیحی',
                 enablePreferredIP: 'فعال‌سازی IP ترجیحی',
                 enableNativeAddress: 'فعال‌سازی آدرس اصلی',
-                enableGitHubPreferred: 'فعال‌سازی ترجیح پیش‌فرض GitHub',
+                enableGitHubPreferred: 'فعال‌سازی ترجیح سفارشی',
                 allowAPIManagement: 'اجازه مدیریت API (ae):',
                 regionMatching: 'تطبیق منطقه (rm):',
                 downgradeControl: 'کنترل کاهش سطح (qj):',
@@ -2566,9 +3920,12 @@
                 trojanPasswordPlaceholder: 'خالی بگذارید تا از UUID استفاده شود',
                 trojanPasswordHint: 'رمز عبور Trojan سفارشی را تنظیم کنید. اگر خالی بگذارید از UUID استفاده می‌شود. کلاینت به طور خودکار رمز عبور را با SHA224 هش می‌کند.',
                 protocolHint: 'می‌توانید چندین پروتکل را همزمان فعال کنید. اشتراک گره‌های پروتکل‌های انتخاب شده را تولید می‌کند.<br>• VLESS WS: پروتکل استاندارد مبتنی بر WebSocket<br>• Trojan: احراز هویت با رمز عبور SHA224<br>• xhttp: پروتکل استتار مبتنی بر HTTP POST (نیاز به اتصال دامنه سفارشی و فعال‌سازی gRPC دارد)',
+                alpn: 'TLS ALPN',
+                alpnDefault: 'پیش‌فرض (خالی، مذاکره توسط کلاینت)',
+                alpnHint: 'فقط به لینک‌های TLS اضافه می‌شود؛ اگر خالی باشد alpn نوشته نمی‌شود.',
                 saveProtocol: 'ذخیره تنظیمات پروتکل',
                 subscriptionConverterPlaceholder: 'پیش‌فرض: https://url.v1.mk/sub',
-                subscriptionConverterHint: 'آدرس API تبدیل اشتراک سفارشی، اگر خالی بگذارید از آدرس پیش‌فرض استفاده می‌شود',
+                subscriptionConverterHint: 'تبدیل اشتراک به صورت داخلی پیاده‌سازی شده است و نیازی به API خارجی ندارد. این فیلد فقط برای سازگاری حفظ شده و می‌توان آن را خالی گذاشت.',
                 builtinPreferredHint: 'کنترل اینکه کدام گره‌های ترجیحی داخلی در اشتراک گنجانده شوند. به طور پیش‌فرض همه فعال هستند.',
                 apiEnabledDefault: 'پیش‌فرض (بستن API)',
                 apiEnabledYes: 'فعال‌سازی مدیریت API',
@@ -2590,7 +3947,7 @@
                     KR: '🇰🇷 کره جنوبی', DE: '🇩🇪 آلمان', SE: '🇸🇪 سوئد', NL: '🇳🇱 هلند',
                     FI: '🇫🇮 فنلاند', GB: '🇬🇧 بریتانیا'
                 },
-                terminal: 'ترمینال v2.9.6',
+                terminal: 'ترمینال v2.9.8',
                 githubProject: 'پروژه GitHub',
                 autoDetectClient: 'تشخیص خودکار',
                 selectionLogicText: 'هم‌منطقه → منطقه مجاور → سایر مناطق',
@@ -2629,219 +3986,949 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>${t.title}</title>
         <style>
+            :root {
+                --cp-bg: #05030e;
+                --cp-bg-2: #0a0820;
+                --cp-bg-3: #110835;
+                --cp-cyan: #00f0ff;
+                --cp-cyan-d: #00b8c4;
+                --cp-pink: #ff2bd6;
+                --cp-pink-d: #d1239f;
+                --cp-purple: #a347ff;
+                --cp-yellow: #fff200;
+                --cp-mint: #00ff9d;
+                --cp-amber: #ffb400;
+                --cp-red: #ff3860;
+                --cp-text: #e6f5ff;
+                --cp-text-dim: #7aa9c4;
+                --cp-border: rgba(0, 240, 255, 0.55);
+                --cp-border-pink: rgba(255, 43, 214, 0.55);
+                --cp-grid: rgba(255, 43, 214, 0.16);
+            }
             * { margin: 0; padding: 0; box-sizing: border-box; }
+            html, body { min-height: 100%; }
             body {
-                font-family: "Courier New", monospace;
-                background: #000; color: #00ff00; min-height: 100vh;
-                overflow-x: hidden; position: relative;
+                font-family: "JetBrains Mono", "Fira Code", "Courier New", monospace;
+                background: radial-gradient(ellipse at 80% -10%, #2a0040 0%, var(--cp-bg) 50%, #000 100%);
+                color: var(--cp-text);
+                min-height: 100vh;
+                overflow-x: hidden;
+                position: relative;
+            }
+            body::before {
+                content: ""; position: fixed; inset: 0;
+                background-image:
+                    linear-gradient(var(--cp-grid) 1px, transparent 1px),
+                    linear-gradient(90deg, var(--cp-grid) 1px, transparent 1px);
+                background-size: 48px 48px;
+                mask-image: radial-gradient(ellipse at center, #000 30%, transparent 85%);
+                z-index: -3;
+                animation: cp-grid-slide 22s linear infinite;
+                pointer-events: none;
+            }
+            body::after {
+                content: ""; position: fixed; inset: 0;
+                background: repeating-linear-gradient(
+                    180deg,
+                    rgba(255,255,255,0.035) 0,
+                    rgba(255,255,255,0.035) 1px,
+                    transparent 1px,
+                    transparent 3px
+                );
+                pointer-events: none;
+                z-index: 6;
+                mix-blend-mode: overlay;
+                animation: cp-scan-flicker 6s infinite;
+            }
+            @keyframes cp-grid-slide {
+                0% { background-position: 0 0, 0 0; }
+                100% { background-position: 48px 48px, 48px 48px; }
+            }
+            @keyframes cp-scan-flicker {
+                0%, 100% { opacity: 0.55; }
+                50% { opacity: 0.85; }
             }
             .matrix-bg {
-                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-                background: #000;
-                z-index: -1;
+                position: fixed; inset: 0;
+                background:
+                    radial-gradient(circle at 85% 15%, rgba(255,43,214,0.18) 0%, transparent 45%),
+                    radial-gradient(circle at 10% 85%, rgba(0,240,255,0.18) 0%, transparent 45%),
+                    radial-gradient(circle at 55% 50%, rgba(163,71,255,0.10) 0%, transparent 60%);
+                z-index: -2;
+                pointer-events: none;
             }
-            @keyframes bg-pulse {
-                0%, 100% { background: linear-gradient(45deg, #000 0%, #001100 50%, #000 100%); }
-                50% { background: linear-gradient(45deg, #000 0%, #002200 50%, #000 100%); }
-            }
-            .matrix-rain {
-                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-                background: transparent;
-                z-index: -1;
-                display: none;
-            }
-            @keyframes matrix-fall {
-                0% { transform: translateY(-100%); }
-                100% { transform: translateY(100vh); }
-            }
+            .matrix-rain { display: none; }
             .matrix-code-rain {
-                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                position: fixed; inset: 0;
                 pointer-events: none; z-index: -1;
                 overflow: hidden;
-                display: none;
             }
             .matrix-column {
-                position: absolute; top: -100%; left: 0;
-                color: #00ff00; font-family: "Courier New", monospace;
-                font-size: 14px; line-height: 1.2;
-                text-shadow: 0 0 5px #00ff00;
+                position: absolute; top: -120%; left: 0;
+                color: var(--cp-cyan);
+                font-family: "JetBrains Mono", "Courier New", monospace;
+                font-size: 14px; line-height: 1.25;
+                text-shadow: 0 0 6px var(--cp-cyan), 0 0 12px rgba(0,240,255,0.5);
+                animation: cp-drop linear infinite;
             }
-            @keyframes matrix-drop {
-                0% { top: -100%; opacity: 1; }
-                10% { opacity: 1; }
-                90% { opacity: 0.3; }
-                100% { top: 100vh; opacity: 0; }
+            @keyframes cp-drop {
+                0%   { top: -120%; opacity: 0; }
+                10%  { opacity: 0.85; }
+                90%  { opacity: 0.4; }
+                100% { top: 110vh; opacity: 0; }
             }
-            .matrix-column:nth-child(odd) {
-                animation-duration: 12s;
-                animation-delay: -2s;
+            .matrix-column:nth-child(odd)  { animation-duration: 12s; }
+            .matrix-column:nth-child(even) { animation-duration: 18s; color: var(--cp-pink); text-shadow: 0 0 6px var(--cp-pink), 0 0 14px rgba(255,43,214,0.5); }
+            .matrix-column:nth-child(3n)   { animation-duration: 20s; color: var(--cp-purple); text-shadow: 0 0 6px var(--cp-purple); }
+            .matrix-column:nth-child(5n)   { animation-duration: 9s; opacity: 0.6; }
+
+            ::selection { background: var(--cp-pink); color: var(--cp-bg); }
+
+            .container {
+                max-width: 1180px;
+                margin: 0 auto;
+                padding: 110px 24px 60px;
+                position: relative;
+                z-index: 1;
             }
-            .matrix-column:nth-child(even) {
-                animation-duration: 18s;
-                animation-delay: -5s;
+            .header {
+                text-align: center;
+                margin-bottom: 36px;
+                padding: 28px 24px;
+                position: relative;
+                border: 1px solid var(--cp-border);
+                background: linear-gradient(135deg, rgba(15,3,40,0.6), rgba(40,5,70,0.45));
+                clip-path: polygon(
+                    0 14px, 14px 0,
+                    calc(100% - 80px) 0, calc(100% - 60px) 14px,
+                    100% 14px, 100% calc(100% - 14px),
+                    calc(100% - 14px) 100%, 80px 100%,
+                    60px calc(100% - 14px), 0 calc(100% - 14px)
+                );
+                box-shadow: 0 0 30px rgba(0,240,255,0.25), 0 0 60px rgba(255,43,214,0.18);
             }
-            .matrix-column:nth-child(3n) {
-                animation-duration: 20s;
-                animation-delay: -8s;
+            .header::before {
+                content: "// SYS_ID / CFNEW / NIGHTCITY.NET";
+                position: absolute; top: 8px; left: 24px;
+                font-size: 10px; letter-spacing: 0.35em;
+                color: var(--cp-pink);
+                text-shadow: 0 0 6px var(--cp-pink);
             }
-            .container { max-width: 900px; margin: 0 auto; padding: 20px; position: relative; z-index: 1; }
-            .header { text-align: center; margin-bottom: 40px; }
+            .header::after {
+                content: "STATUS // ONLINE";
+                position: absolute; top: 8px; right: 24px;
+                font-size: 10px; letter-spacing: 0.35em;
+                color: var(--cp-mint);
+                text-shadow: 0 0 6px var(--cp-mint);
+            }
             .title {
-                font-size: 3.5rem; font-weight: bold;
-                text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00, 0 0 30px #00ff00, 0 0 40px #00ff00;
-                margin-bottom: 10px;
+                font-size: clamp(2.2rem, 5vw, 3.4rem);
+                font-weight: 800;
+                margin: 14px 0 8px;
+                color: var(--cp-cyan);
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                text-shadow:
+                    0 0 12px var(--cp-cyan),
+                    0 0 28px rgba(0,240,255,0.5),
+                    -2px 0 var(--cp-pink),
+                    2px 0 var(--cp-mint);
                 position: relative;
-                color: #00ff00;
+                animation: cp-title-flicker 6s infinite;
             }
-            @keyframes matrix-glow {
-                from { text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00, 0 0 30px #00ff00, 0 0 40px #00ff00; }
-                to { text-shadow: 0 0 20px #00ff00, 0 0 30px #00ff00, 0 0 40px #00ff00, 0 0 50px #00ff00; }
+            @keyframes cp-title-flicker {
+                0%, 92%, 100% { opacity: 1; }
+                94%, 96% { opacity: 0.65; }
             }
-            @keyframes matrix-pulse {
-                0%, 100% { background-position: 0% 50%; }
-                50% { background-position: 100% 50%; }
+            .subtitle {
+                color: var(--cp-text-dim);
+                margin-bottom: 0;
+                font-size: 0.95rem;
+                letter-spacing: 0.25em;
+                text-transform: uppercase;
             }
-            .subtitle { color: #00aa00; margin-bottom: 30px; font-size: 1.2rem; }
+            .subtitle::before { content: "▸ "; color: var(--cp-pink); }
+
             .card {
-                background: rgba(0, 20, 0, 0.9);
-                border: 2px solid #00ff00;
-                border-radius: 0; padding: 30px; margin-bottom: 20px;
-                box-shadow: 0 0 30px rgba(0, 255, 0, 0.5), inset 0 0 20px rgba(0, 255, 0, 0.1);
+                background:
+                    linear-gradient(180deg, rgba(8,4,28,0.85) 0%, rgba(15,3,40,0.78) 100%);
+                border: 1px solid var(--cp-border);
+                border-radius: 0;
+                padding: 26px 28px 28px;
+                margin-bottom: 22px;
                 position: relative;
-                backdrop-filter: blur(10px);
-                box-sizing: border-box;
+                backdrop-filter: blur(8px);
                 width: 100%;
-                max-width: 100%;
+                box-shadow:
+                    0 0 0 1px rgba(255,43,214,0.18),
+                    0 0 22px rgba(0,240,255,0.18),
+                    0 0 60px rgba(255,43,214,0.06),
+                    inset 0 0 24px rgba(0,240,255,0.05);
+                clip-path: polygon(
+                    0 16px, 16px 0,
+                    calc(100% - 56px) 0, calc(100% - 40px) 16px,
+                    100% 16px, 100% calc(100% - 14px),
+                    calc(100% - 14px) 100%, 40px 100%,
+                    24px calc(100% - 14px), 0 calc(100% - 14px)
+                );
             }
-            @keyframes card-glow {
-                0%, 100% { box-shadow: 0 0 30px rgba(0, 255, 0, 0.5), inset 0 0 20px rgba(0, 255, 0, 0.1); }
-                50% { box-shadow: 0 0 40px rgba(0, 255, 0, 0.7), inset 0 0 30px rgba(0, 255, 0, 0.2); }
-            }
-            .card::before {
-                content: ""; position: absolute; top: 0; left: 0;
-                width: 100%; height: 100%;
-                background: none;
-                opacity: 0; pointer-events: none;
-            }
-            @keyframes scan-line {
-                0% { transform: translateX(-100%); }
-                100% { transform: translateX(100%); }
+            .card::after {
+                content: ""; position: absolute; top: 0; left: 0; right: 0;
+                height: 1px;
+                background: linear-gradient(90deg, transparent, var(--cp-pink), var(--cp-cyan), transparent);
+                opacity: 0.7;
             }
             .card-title {
-                font-size: 1.8rem; margin-bottom: 20px;
-                color: #00ff00; text-shadow: 0 0 5px #00ff00;
+                font-size: 1.1rem;
+                margin: 0 0 20px;
+                color: var(--cp-cyan);
+                letter-spacing: 0.25em;
+                text-transform: uppercase;
+                text-shadow: 0 0 8px var(--cp-cyan);
+                display: flex; align-items: center; gap: 12px;
+                font-weight: 700;
             }
+            .card-title::before {
+                content: ""; display: inline-block;
+                width: 14px; height: 14px;
+                background: var(--cp-pink);
+                box-shadow: 0 0 10px var(--cp-pink);
+                transform: rotate(45deg);
+            }
+            .card-title::after {
+                content: ""; flex: 1; height: 1px;
+                background: linear-gradient(90deg, var(--cp-cyan), transparent);
+                margin-left: 6px;
+            }
+            h3, h4 {
+                color: var(--cp-cyan);
+                letter-spacing: 0.18em;
+                text-transform: uppercase;
+                text-shadow: 0 0 6px var(--cp-cyan);
+                font-weight: 700;
+            }
+
             .client-grid {
-                display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-                gap: 15px; margin: 20px 0;
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 14px;
+                margin: 12px 0 18px;
             }
             .client-btn {
-                background: rgba(0, 20, 0, 0.8);
-                border: 2px solid #00ff00;
-                padding: 15px 20px; color: #00ff00;
-                font-family: "Courier New", monospace; font-weight: bold;
-                cursor: pointer; transition: all 0.4s ease;
-                text-align: center; position: relative;
-                overflow: hidden;
-                text-shadow: 0 0 5px #00ff00;
-                box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
-            }
-            .client-btn::before {
-                content: ""; position: absolute; top: 0; left: -100%;
-                width: 100%; height: 100%;
-                background: linear-gradient(90deg, transparent, rgba(0,255,0,0.4), transparent);
-                transition: left 0.6s ease;
-            }
-            .client-btn::after {
-                content: ""; position: absolute; top: 0; left: 0;
-                width: 100%; height: 100%;
-                background: linear-gradient(45deg, transparent 30%, rgba(0,255,0,0.1) 50%, transparent 70%);
-                opacity: 0;
-                transition: opacity 0.3s ease;
-            }
-            .client-btn:hover::before { left: 100%; }
-            .client-btn:hover::after { opacity: 1; }
-            .client-btn:hover {
-                background: rgba(0, 255, 0, 0.3);
-                box-shadow: 0 0 25px #00ff00, 0 0 35px rgba(0, 255, 0, 0.5);
-                transform: translateY(-3px) scale(1.05);
-                text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00;
-            }
-            .generate-btn {
-                background: rgba(0, 255, 0, 0.15);
-                border: 2px solid #00ff00; padding: 15px 30px;
-                color: #00ff00; font-family: "Courier New", monospace;
-                font-weight: bold; cursor: pointer;
-                transition: all 0.4s ease; margin-right: 15px;
-                text-shadow: 0 0 8px #00ff00;
-                box-shadow: 0 0 15px rgba(0, 255, 0, 0.4);
+                background: linear-gradient(135deg, rgba(0,240,255,0.08), rgba(255,43,214,0.08));
+                border: 1px solid var(--cp-border);
+                padding: 14px 18px;
+                color: var(--cp-cyan);
+                font-family: inherit;
+                font-weight: 700;
+                font-size: 0.85rem;
+                letter-spacing: 0.18em;
+                text-transform: uppercase;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                text-align: center;
                 position: relative;
                 overflow: hidden;
+                text-shadow: 0 0 6px var(--cp-cyan);
+                clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
             }
-            .generate-btn::before {
-                content: ""; position: absolute; top: 0; left: -100%;
-                width: 100%; height: 100%;
-                background: linear-gradient(90deg, transparent, rgba(0,255,0,0.5), transparent);
-                transition: left 0.8s ease;
+            .client-btn::before {
+                content: ""; position: absolute; inset: 0; left: -100%;
+                background: linear-gradient(90deg, transparent, rgba(0,240,255,0.35), transparent);
+                transition: left 0.6s ease;
             }
-            .generate-btn:hover::before { left: 100%; }
-            .generate-btn:hover {
-                background: rgba(0, 255, 0, 0.4);
-                box-shadow: 0 0 30px #00ff00, 0 0 40px rgba(0, 255, 0, 0.6);
-                transform: translateY(-4px) scale(1.08);
-                text-shadow: 0 0 15px #00ff00, 0 0 25px #00ff00;
+            .client-btn:hover::before { left: 100%; }
+            .client-btn:hover {
+                color: var(--cp-pink);
+                border-color: var(--cp-pink);
+                background: linear-gradient(135deg, rgba(255,43,214,0.18), rgba(0,240,255,0.10));
+                box-shadow: 0 0 14px rgba(255,43,214,0.55), 0 0 28px rgba(0,240,255,0.30);
+                transform: translateY(-2px);
+                text-shadow: 0 0 8px var(--cp-pink);
             }
-            .atob('c3Vic2NyaXB0aW9u')-url {
-                background: rgba(0, 0, 0, 0.9);
-                border: 2px solid #00ff00; padding: 15px;
-                word-break: break-all; font-family: "Courier New", monospace;
-                color: #00ff00; margin-top: 20px; display: none;
-                box-shadow: inset 0 0 15px rgba(0, 255, 0, 0.4), 0 0 20px rgba(0, 255, 0, 0.3);
-                border-radius: 5px;
+
+            #clientSubscriptionUrl,
+            .subscription-url,
+            [class*='subscription-url'],
+            [class*='c3Vic2NyaXB0aW9u'] {
+                background: rgba(0,0,0,0.7) !important;
+                border: 1px dashed var(--cp-pink) !important;
+                padding: 14px 16px !important;
+                word-break: break-all;
+                font-family: inherit;
+                color: var(--cp-mint) !important;
+                margin-top: 18px;
+                box-shadow: inset 0 0 12px rgba(255,43,214,0.18), 0 0 18px rgba(0,255,157,0.18) !important;
                 position: relative;
                 overflow-wrap: break-word;
                 overflow-x: auto;
                 max-width: 100%;
-                box-sizing: border-box;
+                font-size: 0.85rem;
+                line-height: 1.6;
+                text-shadow: 0 0 6px var(--cp-mint);
             }
-            @keyframes url-glow {
-                from { box-shadow: inset 0 0 15px rgba(0, 255, 0, 0.4), 0 0 20px rgba(0, 255, 0, 0.3); }
-                to { box-shadow: inset 0 0 20px rgba(0, 255, 0, 0.6), 0 0 30px rgba(0, 255, 0, 0.5); }
+            #clientSubscriptionUrl:empty { display: none !important; }
+
+            .cp-hud {
+                position: fixed; top: 18px; right: 22px;
+                color: var(--cp-cyan);
+                font-family: "JetBrains Mono", monospace;
+                font-size: 11px; letter-spacing: 0.2em;
+                text-transform: uppercase;
+                text-align: right;
+                opacity: 0.85;
+                z-index: 1000;
             }
-            .atob('c3Vic2NyaXB0aW9u')-url::before {
-                content: ""; position: absolute; top: 0; left: -100%;
-                width: 100%; height: 100%;
-                background: none;
+            .cp-hud .cp-hud-label { color: var(--cp-pink); }
+            .cp-hud .cp-hud-line { display: block; }
+            .cp-lang-wrapper {
+                position: fixed; top: 18px; left: 22px; z-index: 1000;
+                display: flex; align-items: center; gap: 10px;
             }
-            @keyframes url-scan {
-                0% { left: -100%; }
-                100% { left: 100%; }
+            .cp-lang-tag {
+                color: var(--cp-pink); font-size: 11px;
+                letter-spacing: 0.25em; text-transform: uppercase;
+                text-shadow: 0 0 6px var(--cp-pink);
             }
-            .matrix-text {
-                position: fixed; top: 20px; right: 20px;
-                color: #00ff00; font-family: "Courier New", monospace;
-                font-size: 0.8rem; opacity: 0.6;
+            #languageSelector {
+                background: rgba(8,4,28,0.85);
+                border: 1px solid var(--cp-cyan);
+                color: var(--cp-cyan);
+                padding: 6px 12px;
+                font-family: inherit;
+                font-size: 12px;
+                cursor: pointer;
+                letter-spacing: 0.12em;
+                text-shadow: 0 0 6px var(--cp-cyan);
+                box-shadow: 0 0 12px rgba(0,240,255,0.35);
+                clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
             }
-            @keyframes matrix-flicker {
-                0%, 100% { opacity: 0.6; }
-                50% { opacity: 1; }
+            #languageSelector option { background: var(--cp-bg-2); color: var(--cp-cyan); }
+
+            /* FX toggle - 页面特效图形化开关 */
+            .cp-fx-toggle {
+                position: fixed; top: 68px; left: 22px; z-index: 1001;
+                background: rgba(8,4,28,0.85);
+                border: 1px solid var(--cp-mint);
+                color: var(--cp-mint);
+                padding: 6px 12px;
+                font-family: inherit;
+                font-size: 11px;
+                letter-spacing: 0.18em;
+                text-transform: uppercase;
+                cursor: pointer;
+                text-shadow: 0 0 6px var(--cp-mint);
+                box-shadow: 0 0 10px rgba(0,255,157,0.35);
+                clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
+                transition: all 0.2s ease;
+                display: inline-flex; align-items: center; gap: 6px;
+            }
+            .cp-fx-toggle:hover {
+                color: var(--cp-pink);
+                border-color: var(--cp-pink);
+                text-shadow: 0 0 8px var(--cp-pink);
+                box-shadow: 0 0 16px rgba(255,43,214,0.55);
+            }
+            .cp-fx-toggle .cp-fx-dot {
+                width: 6px; height: 6px;
+                background: var(--cp-mint);
+                border-radius: 50%;
+                box-shadow: 0 0 8px var(--cp-mint);
+                transition: all 0.2s;
+            }
+            body.fx-off .cp-fx-toggle {
+                color: var(--cp-text-dim);
+                border-color: var(--cp-text-dim);
+                text-shadow: none;
+                box-shadow: none;
+            }
+            body.fx-off .cp-fx-toggle .cp-fx-dot {
+                background: transparent;
+                border: 1px solid var(--cp-text-dim);
+                box-shadow: none;
+            }
+            /* FX OFF: 关闭所有装饰性特效，保留布局和配色 */
+            body.fx-off .matrix-bg,
+            body.fx-off .matrix-code-rain,
+            body.fx-off .matrix-column { display: none !important; }
+            body.fx-off::before,
+            body.fx-off::after { display: none !important; content: none !important; }
+            body.fx-off { background: var(--cp-bg) !important; }
+            body.fx-off * {
+                animation: none !important;
+                transition: color 0.15s, background-color 0.15s, border-color 0.15s, box-shadow 0.15s !important;
+            }
+            body.fx-off .cp-glitch::before,
+            body.fx-off .cp-glitch::after { display: none !important; }
+            body.fx-off .terminal-cursor::after,
+            body.fx-off .cp-fab-save .cp-fab-dot { animation: none !important; }
+            body.fx-off .cp-fab-save:hover { transform: none !important; }
+            body.fx-off .cp-action-bar.cp-dirty::before { animation: none !important; }
+            body.fx-off .header::before { display: none !important; }
+            body.fx-off .card { backdrop-filter: none !important; }
+            body.fx-off select, body.fx-off input, body.fx-off textarea { backdrop-filter: none !important; }
+
+            /* Status panel inside card */
+            #systemStatus {
+                background: linear-gradient(135deg, rgba(0,240,255,0.05), rgba(255,43,214,0.05)) !important;
+                border: 1px solid var(--cp-border) !important;
+                padding: 18px 20px !important;
+                margin: 14px 0 0 !important;
+                box-shadow: inset 0 0 16px rgba(0,240,255,0.12) !important;
+                position: relative;
+                clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+            }
+            #systemStatus > div {
+                color: var(--cp-text) !important;
+                text-shadow: none !important;
+                font-family: inherit !important;
+                margin: 6px 0 !important;
+                font-size: 0.85rem !important;
+                letter-spacing: 0.05em;
+            }
+            #systemStatus > div:first-child {
+                color: var(--cp-pink) !important;
+                font-weight: 700 !important;
+                letter-spacing: 0.25em !important;
+                text-shadow: 0 0 6px var(--cp-pink) !important;
+                margin-bottom: 14px !important;
+                text-transform: uppercase;
+            }
+
+            /* Force inputs / selects to cyberpunk */
+            input[type="text"], input[type="number"], input[type="password"],
+            select, textarea {
+                background: rgba(0,0,0,0.6) !important;
+                border: 1px solid var(--cp-border) !important;
+                color: var(--cp-cyan) !important;
+                font-family: inherit !important;
+                font-size: 13px !important;
+                padding: 10px 12px !important;
+                outline: none;
+                transition: border-color 0.2s, box-shadow 0.2s;
+                box-shadow: inset 0 0 8px rgba(0,240,255,0.08) !important;
+                letter-spacing: 0.04em;
+            }
+            input::placeholder { color: var(--cp-text-dim) !important; opacity: 0.7; }
+            input:focus, select:focus, textarea:focus {
+                border-color: var(--cp-pink) !important;
+                box-shadow: 0 0 0 1px var(--cp-pink), 0 0 14px rgba(255,43,214,0.4) !important;
+            }
+            select option { background: var(--cp-bg-2); color: var(--cp-cyan); }
+            input[type="checkbox"], input[type="radio"] {
+                accent-color: var(--cp-pink);
+            }
+
+            label {
+                color: var(--cp-cyan) !important;
+                letter-spacing: 0.05em;
+                text-shadow: 0 0 4px rgba(0,240,255,0.4);
+            }
+            label[style*="font-weight"], label[style*="bold"] {
+                font-weight: 700 !important;
+                color: var(--cp-pink) !important;
+                text-shadow: 0 0 6px var(--cp-pink) !important;
+                letter-spacing: 0.15em !important;
+                text-transform: uppercase;
+                font-size: 0.78rem !important;
+            }
+            small {
+                color: var(--cp-text-dim) !important;
+                font-size: 0.78rem !important;
+                letter-spacing: 0.04em;
+                line-height: 1.5;
+            }
+
+            /* Buttons inside forms - global override */
+            button, input[type="submit"] {
+                background: linear-gradient(135deg, rgba(0,240,255,0.15), rgba(255,43,214,0.15)) !important;
+                border: 1px solid var(--cp-border) !important;
+                color: var(--cp-cyan) !important;
+                font-family: inherit !important;
+                font-weight: 700 !important;
+                cursor: pointer;
+                padding: 10px 18px !important;
+                letter-spacing: 0.18em !important;
+                text-transform: uppercase;
+                font-size: 0.78rem !important;
+                text-shadow: 0 0 6px var(--cp-cyan) !important;
+                transition: all 0.25s ease;
+                clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+                box-shadow: 0 0 10px rgba(0,240,255,0.25);
+            }
+            button:hover, input[type="submit"]:hover {
+                color: var(--cp-pink) !important;
+                border-color: var(--cp-pink) !important;
+                box-shadow: 0 0 16px rgba(255,43,214,0.45), 0 0 32px rgba(0,240,255,0.20) !important;
+                transform: translateY(-1px);
+                text-shadow: 0 0 8px var(--cp-pink) !important;
+            }
+            button[id*="Reset"], button[onclick*="reset"], button[style*="ff0000"] {
+                color: var(--cp-red) !important;
+                border-color: var(--cp-red) !important;
+                text-shadow: 0 0 6px var(--cp-red) !important;
+                background: linear-gradient(135deg, rgba(255,56,96,0.15), rgba(255,43,214,0.10)) !important;
+            }
+            button[id*="Reset"]:hover, button[onclick*="reset"]:hover, button[style*="ff0000"]:hover {
+                box-shadow: 0 0 16px rgba(255,56,96,0.5) !important;
+            }
+            button[id="stopLatencyTest"] {
+                color: var(--cp-red) !important;
+                border-color: var(--cp-red) !important;
+            }
+
+            /* Form sub-cards */
+            .card form > div[style*="background: rgba(15, 3, 40"],
+            .card form > div[style*="background: rgba(20, 5, 50"],
+            div[style*="background: rgba(15, 3, 40"],
+            div[style*="background: rgba(20, 5, 50"] {
+                background: linear-gradient(135deg, rgba(0,240,255,0.04), rgba(255,43,214,0.04)) !important;
+                border: 1px solid var(--cp-border-pink) !important;
+                box-shadow: inset 0 0 12px rgba(255,43,214,0.06) !important;
+                border-radius: 0 !important;
+            }
+
+            /* kvStatus / statusMessage / currentConfig / pathTypeInfo */
+            #kvStatus, #statusMessage, #currentConfig, #pathTypeInfo {
+                background: rgba(0,0,0,0.55) !important;
+                border: 1px solid var(--cp-border) !important;
+                color: var(--cp-cyan) !important;
+                font-family: inherit !important;
+                box-shadow: inset 0 0 10px rgba(0,240,255,0.10) !important;
+                padding: 12px 14px !important;
+                font-size: 0.85rem !important;
+                letter-spacing: 0.04em;
+            }
+            #pathTypeInfo div:first-child {
+                color: var(--cp-pink) !important;
+                text-shadow: 0 0 6px var(--cp-pink) !important;
+                letter-spacing: 0.2em !important;
+            }
+
+            /* Latency Result list */
+            #latencyResultsList {
+                background: rgba(0,0,0,0.5) !important;
+                border: 1px solid var(--cp-border) !important;
+            }
+            #latencyResultsList > div {
+                border-bottom: 1px dashed rgba(0,240,255,0.18) !important;
+            }
+            #cityFilterContainer {
+                background: rgba(0,0,0,0.55) !important;
+                border: 1px solid var(--cp-border-pink) !important;
+            }
+
+            /* Related links area */
+            .card a {
+                color: var(--cp-cyan) !important;
+                text-decoration: none;
+                text-shadow: 0 0 6px var(--cp-cyan);
+                letter-spacing: 0.15em;
+                text-transform: uppercase;
+                font-size: 0.85rem;
+                padding: 4px 0;
+                border-bottom: 1px dashed transparent;
+                transition: all 0.25s;
+            }
+            .card a:hover {
+                color: var(--cp-pink) !important;
+                border-bottom-color: var(--cp-pink);
+                text-shadow: 0 0 8px var(--cp-pink);
+            }
+
+            /* Scrollbars */
+            ::-webkit-scrollbar { width: 8px; height: 8px; }
+            ::-webkit-scrollbar-track { background: rgba(0,0,0,0.4); }
+            ::-webkit-scrollbar-thumb {
+                background: linear-gradient(180deg, var(--cp-pink), var(--cp-cyan));
+            }
+
+            .cp-glitch {
+                position: relative;
+                display: inline-block;
+            }
+
+            /* Floating action dock - bottom-right anchored FAB cluster */
+            .cp-action-bar {
+                position: fixed;
+                right: 22px;
+                bottom: 22px;
+                z-index: 99999;
+                isolation: isolate;
+                display: flex;
+                flex-direction: row-reverse;
+                align-items: center;
+                gap: 10px;
+                padding: 0;
+                background: transparent;
+                border: 0;
+                box-shadow: none;
+                max-width: calc(100vw - 32px);
+                pointer-events: auto;
+            }
+            /* Primary SAVE FAB - large, magenta, pulses when dirty */
+            .cp-fab-save {
+                position: relative;
+                min-width: 188px;
+                padding: 16px 26px !important;
+                font-size: 0.92rem !important;
+                font-weight: 800 !important;
+                letter-spacing: 0.22em !important;
+                text-transform: uppercase;
+                color: var(--cp-pink) !important;
+                background:
+                    linear-gradient(135deg, rgba(255,43,214,0.45) 0%, rgba(0,240,255,0.25) 100%) !important;
+                border: 2px solid var(--cp-pink) !important;
+                text-shadow: 0 0 10px var(--cp-pink) !important;
+                box-shadow:
+                    0 0 0 1px rgba(0,240,255,0.4),
+                    0 0 24px rgba(255,43,214,0.7),
+                    0 0 48px rgba(255,43,214,0.35),
+                    inset 0 0 18px rgba(255,43,214,0.25) !important;
+                clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+                cursor: pointer;
+                transition: transform 0.18s ease, box-shadow 0.25s ease;
+                display: inline-flex; align-items: center; gap: 10px;
+                white-space: nowrap;
+                font-family: inherit !important;
+                animation: cp-fab-breathe 3.4s ease-in-out infinite;
+            }
+            @keyframes cp-fab-breathe {
+                0%, 100% {
+                    box-shadow:
+                        0 0 0 1px rgba(0,240,255,0.4),
+                        0 0 24px rgba(255,43,214,0.7),
+                        0 0 48px rgba(255,43,214,0.35),
+                        inset 0 0 18px rgba(255,43,214,0.25);
+                }
+                50% {
+                    box-shadow:
+                        0 0 0 1px rgba(0,240,255,0.55),
+                        0 0 32px rgba(255,43,214,0.9),
+                        0 0 80px rgba(255,43,214,0.45),
+                        inset 0 0 24px rgba(255,43,214,0.4);
+                }
+            }
+            .cp-fab-save:hover {
+                transform: translateY(-3px) scale(1.03);
+                color: #fff !important;
+                text-shadow: 0 0 14px #fff, 0 0 22px var(--cp-pink) !important;
+            }
+            .cp-fab-save .cp-fab-icon {
+                font-size: 1.15em;
+                line-height: 1;
+                color: var(--cp-cyan);
+                text-shadow: 0 0 10px var(--cp-cyan);
+            }
+            .cp-fab-save .cp-fab-dot {
+                width: 8px; height: 8px;
+                background: var(--cp-mint);
+                box-shadow: 0 0 8px var(--cp-mint);
+                transform: rotate(45deg);
+                margin-left: 4px;
+                opacity: 0.5;
+                transition: all 0.2s;
+            }
+            .cp-action-bar.cp-dirty .cp-fab-save {
+                animation: cp-fab-dirty 1.1s ease-in-out infinite;
+                color: #fff !important;
+            }
+            .cp-action-bar.cp-dirty .cp-fab-save .cp-fab-dot {
+                background: var(--cp-pink);
+                box-shadow: 0 0 12px var(--cp-pink), 0 0 24px var(--cp-pink);
+                opacity: 1;
+            }
+            @keyframes cp-fab-dirty {
+                0%, 100% {
+                    box-shadow:
+                        0 0 0 1px var(--cp-pink),
+                        0 0 24px rgba(255,43,214,0.85),
+                        0 0 60px rgba(255,43,214,0.5),
+                        inset 0 0 22px rgba(255,43,214,0.45);
+                    transform: scale(1);
+                }
+                50% {
+                    box-shadow:
+                        0 0 0 2px var(--cp-pink),
+                        0 0 40px rgba(255,43,214,1),
+                        0 0 100px rgba(255,43,214,0.7),
+                        inset 0 0 30px rgba(255,43,214,0.6);
+                    transform: scale(1.04);
+                }
+            }
+            /* Secondary mini buttons - icon-first */
+            .cp-action-btn {
+                background: rgba(8,4,28,0.85) !important;
+                border: 1px solid var(--cp-border) !important;
+                color: var(--cp-cyan) !important;
+                font-family: inherit !important;
+                font-weight: 700 !important;
+                cursor: pointer;
+                width: 46px; height: 46px;
+                padding: 0 !important;
+                letter-spacing: 0 !important;
+                font-size: 1.05rem !important;
+                text-shadow: 0 0 6px var(--cp-cyan) !important;
+                transition: all 0.25s ease;
+                clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+                box-shadow: 0 0 10px rgba(0,240,255,0.35);
+                display: inline-flex; align-items: center; justify-content: center;
+                white-space: nowrap;
+                position: relative;
+            }
+            .cp-action-btn .cp-btn-label { display: none; }
+            .cp-action-btn::after {
+                content: attr(data-tip);
+                position: absolute;
+                bottom: 100%; right: 50%;
+                transform: translate(50%, -8px);
+                background: rgba(8,4,28,0.95);
+                color: var(--cp-cyan);
+                font-size: 10px;
+                letter-spacing: 0.18em;
+                text-transform: uppercase;
+                padding: 5px 9px;
+                border: 1px solid var(--cp-border);
+                opacity: 0; pointer-events: none;
+                transition: opacity 0.2s;
+                white-space: nowrap;
+                text-shadow: 0 0 5px var(--cp-cyan);
+                box-shadow: 0 0 10px rgba(0,240,255,0.4);
+            }
+            .cp-action-btn:hover::after { opacity: 1; }
+            .cp-action-btn:hover {
+                color: var(--cp-pink) !important;
+                border-color: var(--cp-pink) !important;
+                box-shadow: 0 0 16px rgba(255,43,214,0.55) !important;
+                transform: translateY(-2px);
+                text-shadow: 0 0 8px var(--cp-pink) !important;
+            }
+            .cp-action-btn-danger {
+                color: var(--cp-red) !important;
+                border-color: var(--cp-red) !important;
+                text-shadow: 0 0 6px var(--cp-red) !important;
+                box-shadow: 0 0 10px rgba(255,56,96,0.45) !important;
+            }
+            .cp-action-btn-danger:hover {
+                color: #fff !important;
+                box-shadow: 0 0 20px rgba(255,56,96,0.85) !important;
+                transform: translateY(-2px);
+            }
+            .cp-action-btn-saving,
+            .cp-fab-save.cp-action-btn-saving {
+                opacity: 0.7;
+                pointer-events: none;
+                animation: cp-pulse-pink 0.9s ease-in-out infinite !important;
+            }
+            @keyframes cp-pulse-pink {
+                0%, 100% { box-shadow: 0 0 12px rgba(255,43,214,0.45); }
+                50%      { box-shadow: 0 0 36px rgba(255,43,214,0.95); }
+            }
+            .container { padding-bottom: 130px; }
+            .cp-action-status {
+                position: fixed;
+                right: 22px;
+                bottom: 86px;
+                z-index: 99998;
+                padding: 9px 16px;
+                background: rgba(8,4,28,0.95);
+                border: 1px solid var(--cp-mint);
+                color: var(--cp-mint);
+                font-size: 0.78rem;
+                letter-spacing: 0.16em;
+                text-transform: uppercase;
+                text-shadow: 0 0 6px var(--cp-mint);
+                box-shadow: 0 0 14px rgba(0,255,157,0.45);
+                clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+                opacity: 0;
+                transform: translateY(8px);
+                transition: opacity 0.25s, transform 0.25s;
+                pointer-events: none;
+                white-space: nowrap;
+                max-width: calc(100vw - 44px);
+                overflow: hidden; text-overflow: ellipsis;
+            }
+            .cp-action-status.cp-show { opacity: 1; transform: translateY(0); }
+            .cp-action-status.cp-err {
+                border-color: var(--cp-red);
+                color: var(--cp-red);
+                text-shadow: 0 0 6px var(--cp-red);
+                box-shadow: 0 0 14px rgba(255,56,96,0.55);
+            }
+            /* Toast notification stack (top-right) */
+            .cp-toast-stack {
+                position: fixed;
+                top: 88px;
+                right: 22px;
+                z-index: 100000;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                max-width: min(420px, calc(100vw - 32px));
+                pointer-events: none;
+            }
+            .cp-toast {
+                position: relative;
+                display: flex;
+                align-items: flex-start;
+                gap: 12px;
+                padding: 12px 16px 12px 14px;
+                background: linear-gradient(135deg, rgba(8,4,28,0.96) 0%, rgba(20,5,50,0.92) 100%);
+                border: 1px solid var(--cp-mint);
+                color: var(--cp-mint);
+                font-size: 0.82rem;
+                line-height: 1.45;
+                letter-spacing: 0.06em;
+                text-shadow: 0 0 6px var(--cp-mint);
+                box-shadow:
+                    0 0 0 1px rgba(0,255,157,0.25),
+                    0 0 18px rgba(0,255,157,0.45),
+                    0 8px 28px rgba(0,0,0,0.55);
+                backdrop-filter: blur(8px);
+                clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+                transform: translateX(120%);
+                opacity: 0;
+                transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.25s;
+                pointer-events: auto;
+                overflow: hidden;
+                word-break: break-all;
+            }
+            .cp-toast.cp-show { transform: translateX(0); opacity: 1; }
+            .cp-toast.cp-hide { transform: translateX(120%); opacity: 0; }
+            .cp-toast::before {
+                content: "";
+                position: absolute;
+                left: 0; top: 0; bottom: 0;
+                width: 3px;
+                background: var(--cp-mint);
+                box-shadow: 0 0 10px var(--cp-mint);
+            }
+            .cp-toast-icon {
+                font-size: 1.1rem;
+                line-height: 1;
+                margin-top: 1px;
+                flex-shrink: 0;
+                color: var(--cp-mint);
+                text-shadow: 0 0 8px var(--cp-mint);
+            }
+            .cp-toast-body { flex: 1; min-width: 0; }
+            .cp-toast-title {
+                font-size: 0.72rem;
+                font-weight: 800;
+                letter-spacing: 0.22em;
+                text-transform: uppercase;
+                opacity: 0.85;
+                margin-bottom: 2px;
+            }
+            .cp-toast-msg { white-space: pre-wrap; }
+            .cp-toast-close {
+                position: absolute;
+                top: 6px; right: 8px;
+                background: transparent;
+                border: 0;
+                color: inherit;
+                font-size: 14px;
+                cursor: pointer;
+                opacity: 0.55;
+                padding: 2px 4px;
+                line-height: 1;
+                transition: opacity 0.2s;
+            }
+            .cp-toast-close:hover { opacity: 1; }
+            .cp-toast::after {
+                content: "";
+                position: absolute;
+                left: 0; bottom: 0;
+                height: 2px;
+                width: 100%;
+                background: linear-gradient(90deg, var(--cp-mint), transparent);
+                box-shadow: 0 0 6px var(--cp-mint);
+                transform-origin: left;
+                animation: cp-toast-bar var(--cp-toast-dur, 3200ms) linear forwards;
+            }
+            @keyframes cp-toast-bar {
+                from { transform: scaleX(1); }
+                to   { transform: scaleX(0); }
+            }
+            .cp-toast.cp-toast-success { border-color: var(--cp-mint); color: var(--cp-mint); text-shadow: 0 0 6px var(--cp-mint); }
+            .cp-toast.cp-toast-success::before,
+            .cp-toast.cp-toast-success::after { background: var(--cp-mint); box-shadow: 0 0 10px var(--cp-mint); }
+            .cp-toast.cp-toast-success .cp-toast-icon { color: var(--cp-mint); text-shadow: 0 0 8px var(--cp-mint); }
+            .cp-toast.cp-toast-info { border-color: var(--cp-cyan); color: var(--cp-cyan); text-shadow: 0 0 6px var(--cp-cyan); box-shadow: 0 0 0 1px rgba(0,240,255,0.25), 0 0 18px rgba(0,240,255,0.45), 0 8px 28px rgba(0,0,0,0.55); }
+            .cp-toast.cp-toast-info::before,
+            .cp-toast.cp-toast-info::after { background: var(--cp-cyan); box-shadow: 0 0 10px var(--cp-cyan); }
+            .cp-toast.cp-toast-info .cp-toast-icon { color: var(--cp-cyan); text-shadow: 0 0 8px var(--cp-cyan); }
+            .cp-toast.cp-toast-warn { border-color: var(--cp-amber); color: var(--cp-amber); text-shadow: 0 0 6px var(--cp-amber); box-shadow: 0 0 0 1px rgba(255,176,46,0.25), 0 0 18px rgba(255,176,46,0.45), 0 8px 28px rgba(0,0,0,0.55); }
+            .cp-toast.cp-toast-warn::before,
+            .cp-toast.cp-toast-warn::after { background: var(--cp-amber); box-shadow: 0 0 10px var(--cp-amber); }
+            .cp-toast.cp-toast-warn .cp-toast-icon { color: var(--cp-amber); text-shadow: 0 0 8px var(--cp-amber); }
+            .cp-toast.cp-toast-error { border-color: var(--cp-red); color: var(--cp-red); text-shadow: 0 0 6px var(--cp-red); box-shadow: 0 0 0 1px rgba(255,56,96,0.30), 0 0 18px rgba(255,56,96,0.55), 0 8px 28px rgba(0,0,0,0.55); }
+            .cp-toast.cp-toast-error::before,
+            .cp-toast.cp-toast-error::after { background: var(--cp-red); box-shadow: 0 0 10px var(--cp-red); }
+            .cp-toast.cp-toast-error .cp-toast-icon { color: var(--cp-red); text-shadow: 0 0 8px var(--cp-red); }
+
+            /* Tiny floating "unsaved" badge on the FAB */
+            .cp-action-bar.cp-dirty::before {
+                content: "● UNSAVED";
+                position: absolute;
+                top: -22px; right: 6px;
+                font-size: 9px;
+                letter-spacing: 0.3em;
+                color: var(--cp-pink);
+                text-shadow: 0 0 6px var(--cp-pink);
+                background: rgba(8,4,28,0.92);
+                padding: 3px 8px;
+                border: 1px solid var(--cp-pink);
+                box-shadow: 0 0 10px rgba(255,43,214,0.6);
+                animation: cp-pulse-pink 1.6s ease-in-out infinite;
+            }
+
+            @media (max-width: 720px) {
+                .container { padding: 100px 14px 140px; }
+                .card { padding: 22px 18px; }
+                .header { padding: 22px 18px; }
+                .title { font-size: 2rem; }
+                .cp-hud { font-size: 9px; }
+                .cp-action-bar {
+                    right: 50%;
+                    bottom: 14px;
+                    transform: translateX(50%);
+                    gap: 8px;
+                }
+                .cp-fab-save {
+                    min-width: 0;
+                    padding: 13px 18px !important;
+                    font-size: 0.8rem !important;
+                    letter-spacing: 0.16em !important;
+                }
+                .cp-action-btn { width: 42px; height: 42px; }
+                .cp-action-status { right: 50%; transform: translate(50%, 8px); }
+                .cp-action-status.cp-show { transform: translate(50%, 0); }
             }
         </style>
     </head>
     <body>
         <div class="matrix-bg"></div>
-        <div class="matrix-rain"></div>
         <div class="matrix-code-rain" id="matrixCodeRain"></div>
-            <div class="matrix-text">${t.terminal}</div>
-            <div style="position: fixed; top: 20px; left: 20px; z-index: 1000;">
-                <select id="languageSelector" style="background: rgba(0, 20, 0, 0.9); border: 2px solid #00ff00; color: #00ff00; padding: 8px 12px; font-family: 'Courier New', monospace; font-size: 14px; cursor: pointer; text-shadow: 0 0 5px #00ff00; box-shadow: 0 0 15px rgba(0, 255, 0, 0.4);" onchange="changeLanguage(this.value)">
+            <div class="cp-hud">
+                <span class="cp-hud-line"><span class="cp-hud-label">SYS::</span> ${t.terminal}</span>
+                <span class="cp-hud-line"><span class="cp-hud-label">NODE::</span> NIGHT_CITY</span>
+                <span class="cp-hud-line"><span class="cp-hud-label">LINK::</span> SECURE / ENC</span>
+            </div>
+            <div class="cp-lang-wrapper">
+                <span class="cp-lang-tag">LANG_</span>
+                <select id="languageSelector" onchange="changeLanguage(this.value)">
                     <option value="zh" ${!isFarsi ? 'selected' : ''}>🇨🇳 中文</option>
                     <option value="fa" ${isFarsi ? 'selected' : ''}>🇮🇷 فارسی</option>
                 </select>
             </div>
+            <button type="button" id="cpFxToggle" class="cp-fx-toggle" onclick="cpToggleFx()" title="${isFarsi ? 'تغییر افکت‌های صفحه' : '切换页面特效'}" aria-label="FX toggle">
+                <span class="cp-fx-dot" aria-hidden="true"></span>
+                <span id="cpFxLabel">FX: ON</span>
+            </button>
         <div class="container">
             <div class="header">
-                    <h1 class="title">${t.title}</h1>
+                    <h1 class="title cp-glitch" data-text="${t.title}">${t.title}</h1>
                     <p class="subtitle">${t.subtitle}</p>
             </div>
             <div class="card">
@@ -2862,27 +4949,27 @@
             </div>
             <div class="card">
                     <h2 class="card-title">${t.systemStatus}</h2>
-                <div id="systemStatus" style="margin: 20px 0; padding: 15px; background: rgba(0, 20, 0, 0.8); border: 2px solid #00ff00; box-shadow: 0 0 20px rgba(0, 255, 0, 0.3), inset 0 0 15px rgba(0, 255, 0, 0.1); position: relative; overflow: hidden;">
-                        <div style="color: #00ff00; margin-bottom: 15px; font-weight: bold; text-shadow: 0 0 5px #00ff00;">[ ${t.checking} ]</div>
-                        <div id="regionStatus" style="margin: 8px 0; color: #00ff00; font-family: 'Courier New', monospace; text-shadow: 0 0 3px #00ff00;">${t.workerRegion}${t.checking}</div>
-                        <div id="geoInfo" style="margin: 8px 0; color: #00aa00; font-family: 'Courier New', monospace; font-size: 0.9rem; text-shadow: 0 0 3px #00aa00;">${t.detectionMethod}${t.checking}</div>
-                        <div id="backupStatus" style="margin: 8px 0; color: #00ff00; font-family: 'Courier New', monospace; text-shadow: 0 0 3px #00ff00;">${t.proxyIPStatus}${t.checking}</div>
-                        <div id="currentIP" style="margin: 8px 0; color: #00ff00; font-family: 'Courier New', monospace; text-shadow: 0 0 3px #00ff00;">${t.currentIP}${t.checking}</div>
-                        <div id="echStatus" style="margin: 8px 0; color: #00ff00; font-family: 'Courier New', monospace; text-shadow: 0 0 3px #00ff00; font-size: 0.9rem;">ECH状态: ${t.checking}</div>
-                        <div id="regionMatch" style="margin: 8px 0; color: #00ff00; font-family: 'Courier New', monospace; text-shadow: 0 0 3px #00ff00;">${t.regionMatch}${t.checking}</div>
-                        <div id="selectionLogic" style="margin: 8px 0; color: #00aa00; font-family: 'Courier New', monospace; font-size: 0.9rem; text-shadow: 0 0 3px #00aa00;">${t.selectionLogic}${t.selectionLogicText}</div>
+                <div id="systemStatus" style="margin: 20px 0; padding: 15px; background: rgba(8, 4, 28, 0.8); border: 2px solid #00f0ff; box-shadow: 0 0 20px rgba(0, 240, 255, 0.3), inset 0 0 15px rgba(0, 240, 255, 0.1); position: relative; overflow: hidden;">
+                        <div style="color: #00f0ff; margin-bottom: 15px; font-weight: bold; text-shadow: 0 0 5px #00f0ff;">[ ${t.checking} ]</div>
+                        <div id="regionStatus" style="margin: 8px 0; color: #00f0ff; font-family: 'Courier New', monospace; text-shadow: 0 0 3px #00f0ff;">${t.workerRegion}${t.checking}</div>
+                        <div id="geoInfo" style="margin: 8px 0; color: #7aa9c4; font-family: 'Courier New', monospace; font-size: 0.9rem; text-shadow: 0 0 3px #7aa9c4;">${t.detectionMethod}${t.checking}</div>
+                        <div id="backupStatus" style="margin: 8px 0; color: #00f0ff; font-family: 'Courier New', monospace; text-shadow: 0 0 3px #00f0ff;">${t.proxyIPStatus}${t.checking}</div>
+                        <div id="currentIP" style="margin: 8px 0; color: #00f0ff; font-family: 'Courier New', monospace; text-shadow: 0 0 3px #00f0ff;">${t.currentIP}${t.checking}</div>
+                        <div id="echStatus" style="margin: 8px 0; color: #00f0ff; font-family: 'Courier New', monospace; text-shadow: 0 0 3px #00f0ff; font-size: 0.9rem;">ECH状态: ${t.checking}</div>
+                        <div id="regionMatch" style="margin: 8px 0; color: #00f0ff; font-family: 'Courier New', monospace; text-shadow: 0 0 3px #00f0ff;">${t.regionMatch}${t.checking}</div>
+                        <div id="selectionLogic" style="margin: 8px 0; color: #7aa9c4; font-family: 'Courier New', monospace; font-size: 0.9rem; text-shadow: 0 0 3px #7aa9c4;">${t.selectionLogic}${t.selectionLogicText}</div>
                 </div>
             </div>
             <div class="card" id="configCard" style="display: none;">
                     <h2 class="card-title">${t.configManagement}</h2>
-                <div id="kvStatus" style="margin-bottom: 20px; padding: 10px; background: rgba(0, 20, 0, 0.8); border: 1px solid #00ff00; color: #00ff00;">
+                <div id="kvStatus" style="margin-bottom: 20px; padding: 10px; background: rgba(8, 4, 28, 0.8); border: 1px solid #00f0ff; color: #00f0ff;">
                     ${t.kvStatusChecking}
                 </div>
                 <div id="configContent" style="display: none;">
                     <form id="regionForm" style="margin-bottom: 20px;">
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.specifyRegion}</label>
-                            <select id="wkRegion" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${t.specifyRegion}</label>
+                            <select id="wkRegion" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 14px;">
                                     <option value="">${t.autoDetect}</option>
                                     <option value="HK">${t.regionNames.HK}</option>
                                     <option value="US">${t.regionNames.US}</option>
@@ -2895,144 +4982,155 @@
                                     <option value="FI">${t.regionNames.FI}</option>
                                     <option value="GB">${t.regionNames.GB}</option>
                             </select>
-                                <small id="wkRegionHint" style="color: #00aa00; font-size: 0.85rem; display: none;">⚠️ ${t.customIPDisabledHint}</small>
+                                <small id="wkRegionHint" style="color: #7aa9c4; font-size: 0.85rem; display: none;">⚠️ ${t.customIPDisabledHint}</small>
                         </div>
-                            <button type="submit" style="background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 12px 24px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; margin-right: 10px; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease;">${t.saveRegion}</button>
                     </form>
                     <form id="otherConfigForm" style="margin-bottom: 20px;">
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.protocolSelection}</label>
-                            <div style="padding: 15px; background: rgba(0, 20, 0, 0.6); border: 1px solid #00ff00; border-radius: 5px;">
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${t.protocolSelection}</label>
+                            <div style="padding: 15px; background: rgba(15, 3, 40, 0.6); border: 1px solid #00f0ff; border-radius: 5px;">
                                 <div style="margin-bottom: 10px;">
-                                    <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                    <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff;">
                                         <input type="checkbox" id="ev" checked style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                             <span style="font-size: 1.1rem;">${t.enableVLESS}</span>
                                     </label>
                                 </div>
                                 <div style="margin-bottom: 10px;">
-                                    <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                    <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff;">
                                         <input type="checkbox" id="et" style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                             <span style="font-size: 1.1rem;">${t.enableTrojan}</span>
                                     </label>
                                 </div>
                                 <div style="margin-bottom: 10px;">
-                                    <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                    <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff;">
                                         <input type="checkbox" id="ex" style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                             <span style="font-size: 1.1rem;">${t.enableXhttp}</span>
                                     </label>
                                 </div>
-                                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(0, 255, 0, 0.3);">
+                                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(0, 240, 255, 0.3);">
                                     <div style="margin-bottom: 10px;">
-                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff;">
                                             <input type="checkbox" id="ech" style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                                 <span style="font-size: 1.1rem;">${t.enableECH}</span>
                                         </label>
-                                        <small style="color: #00aa00; font-size: 0.8rem; display: block; margin-top: 5px; margin-left: 26px;">${t.enableECHHint}</small>
+                                        <small style="color: #7aa9c4; font-size: 0.8rem; display: block; margin-top: 5px; margin-left: 26px;">${t.enableECHHint}</small>
                                     </div>
                                     <div style="margin-top: 15px; margin-bottom: 10px;">
-                                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-size: 0.95rem;">${t.customDNS}</label>
-                                        <input type="text" id="customDNS" placeholder="${t.customDNSPlaceholder}" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 13px;">
-                                        <small style="color: #00aa00; font-size: 0.8rem; display: block; margin-top: 5px;">${t.customDNSHint}</small>
+                                        <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-size: 0.95rem;">${t.customDNS}</label>
+                                        <input type="text" id="customDNS" placeholder="${t.customDNSPlaceholder}" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 13px;">
+                                        <small style="color: #7aa9c4; font-size: 0.8rem; display: block; margin-top: 5px;">${t.customDNSHint}</small>
                                     </div>
                                     <div style="margin-bottom: 10px;">
-                                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-size: 0.95rem;">${t.customECHDomain}</label>
-                                        <input type="text" id="customECHDomain" placeholder="${t.customECHDomainPlaceholder}" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 13px;">
-                                        <small style="color: #00aa00; font-size: 0.8rem; display: block; margin-top: 5px;">${t.customECHDomainHint}</small>
+                                        <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-size: 0.95rem;">${t.customECHDomain}</label>
+                                        <input type="text" id="customECHDomain" placeholder="${t.customECHDomainPlaceholder}" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 13px;">
+                                        <small style="color: #7aa9c4; font-size: 0.8rem; display: block; margin-top: 5px;">${t.customECHDomainHint}</small>
+                                    </div>
+                                    <div style="margin-bottom: 10px;">
+                                        <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-size: 0.95rem;">${t.alpn}</label>
+                                        <select id="alpn" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 13px;">
+                                            <option value="">${t.alpnDefault}</option>
+                                            <option value="h3">h3</option>
+                                            <option value="h2">h2</option>
+                                            <option value="http/1.1">http/1.1</option>
+                                            <option value="h3,h2">h3,h2</option>
+                                            <option value="h2,http/1.1">h2,http/1.1</option>
+                                            <option value="h3,h2,http/1.1">h3,h2,http/1.1</option>
+                                        </select>
+                                        <small style="color: #7aa9c4; font-size: 0.8rem; display: block; margin-top: 5px;">${t.alpnHint}</small>
                                     </div>
                                 </div>
-                                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(0, 255, 0, 0.3);">
-                                        <label style="display: block; margin-bottom: 8px; color: #00ff00; font-size: 0.95rem;">${t.trojanPassword}</label>
-                                        <input type="text" id="tp" placeholder="${t.trojanPasswordPlaceholder}" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 13px;">
-                                        <small style="color: #00aa00; font-size: 0.8rem; display: block; margin-top: 5px;">${t.trojanPasswordHint}</small>
+                                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(0, 240, 255, 0.3);">
+                                        <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-size: 0.95rem;">${t.trojanPassword}</label>
+                                        <input type="text" id="tp" placeholder="${t.trojanPasswordPlaceholder}" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 13px;">
+                                        <small style="color: #7aa9c4; font-size: 0.8rem; display: block; margin-top: 5px;">${t.trojanPasswordHint}</small>
                                 </div>
-                                    <small style="color: #00aa00; font-size: 0.85rem; display: block; margin-top: 10px;">${t.protocolHint}</small>
-                                    <button type="button" id="saveProtocolBtn" style="margin-top: 15px; background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 10px 20px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease; width: 100%;">${t.saveProtocol}</button>
+                                    <small style="color: #7aa9c4; font-size: 0.85rem; display: block; margin-top: 10px;">${t.protocolHint}</small>
                             </div>
                         </div>
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.customHomepage}</label>
-                                <input type="text" id="customHomepage" placeholder="${t.customHomepagePlaceholder}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                                <small style="color: #00aa00; font-size: 0.85rem;">${t.customHomepageHint}</small>
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${t.customHomepage}</label>
+                                <input type="text" id="customHomepage" placeholder="${t.customHomepagePlaceholder}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 14px;">
+                                <small style="color: #7aa9c4; font-size: 0.85rem;">${t.customHomepageHint}</small>
                         </div>
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.customPath}</label>
-                                <input type="text" id="customPath" placeholder="${isFarsi ? 'مثال: /mypath یا خالی بگذارید تا از UUID استفاده شود' : '例如: /mypath 或留空使用 UUID'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                                <small style="color: #00aa00; font-size: 0.85rem;">${isFarsi ? 'مسیر اشتراک سفارشی. اگر خالی بگذارید از UUID به عنوان مسیر استفاده می‌شود.' : '自定义订阅路径。留空则使用 UUID 作为路径。'}</small>
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${t.customPath}</label>
+                                <input type="text" id="customPath" placeholder="${isFarsi ? 'مثال: /mypath یا خالی بگذارید تا از UUID استفاده شود' : '例如: /mypath 或留空使用 UUID'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 14px;">
+                                <small style="color: #7aa9c4; font-size: 0.85rem;">${isFarsi ? 'مسیر اشتراک سفارشی. اگر خالی بگذارید از UUID به عنوان مسیر استفاده می‌شود.' : '自定义订阅路径。留空则使用 UUID 作为路径。'}</small>
                         </div>
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.customIP}</label>
-                                <input type="text" id="customIP" placeholder="${isFarsi ? 'مثال: 1.2.3.4:443' : '例如: 1.2.3.4:443'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                                <small style="color: #00aa00; font-size: 0.85rem;">${isFarsi ? 'آدرس و پورت ProxyIP سفارشی' : '自定义ProxyIP地址和端口'}</small>
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${t.customIP}</label>
+                                <input type="text" id="customIP" placeholder="${isFarsi ? 'مثال: 1.2.3.4:443' : '例如: 1.2.3.4:443'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 14px;">
+                                <small style="color: #7aa9c4; font-size: 0.85rem;">${isFarsi ? 'آدرس و پورت ProxyIP سفارشی' : '自定义ProxyIP地址和端口'}</small>
                         </div>
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.preferredIPs}</label>
-                                <input type="text" id="yx" placeholder="${isFarsi ? 'مثال: 1.2.3.4:443#گره هنگ‌کنگ,5.6.7.8:80#گره آمریکا,example.com:8443#گره سنگاپور' : '例如: 1.2.3.4:443#日本节点,5.6.7.8:80#美国节点,example.com:8443#新加坡节点'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                                <small style="color: #00aa00; font-size: 0.85rem;">${isFarsi ? 'فرمت: IP:پورت#نام گره یا IP:پورت (بدون # از نام پیش‌فرض استفاده می‌شود). پشتیبانی از چندین مورد، با کاما جدا می‌شوند. <span style="color: #ffaa00;">IP های اضافه شده از طریق API به طور خودکار در اینجا نمایش داده می‌شوند.</span>' : '格式: IP:端口#节点名称 或 IP:端口 (无#则使用默认名称)。支持多个，用逗号分隔。<span style="color: #ffaa00;">API添加的IP会自动显示在这里。</span>'}</small>
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${t.preferredIPs}</label>
+                                <input type="text" id="yx" placeholder="${isFarsi ? 'مثال: 1.2.3.4:443#گره هنگ‌کنگ,5.6.7.8:80#گره آمریکا,example.com:8443#گره سنگاپور' : '例如: 1.2.3.4:443#日本节点,5.6.7.8:80#美国节点,example.com:8443#新加坡节点'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 14px;">
+                                <small style="color: #7aa9c4; font-size: 0.85rem;">${isFarsi ? 'فرمت: IP:پورت#نام گره یا IP:پورت (بدون # از نام پیش‌فرض استفاده می‌شود). پشتیبانی از چندین مورد، با کاما جدا می‌شوند. <span style="color: #ffb400;">IP های اضافه شده از طریق API به طور خودکار در اینجا نمایش داده می‌شوند.</span>' : '格式: IP:端口#节点名称 或 IP:端口 (无#则使用默认名称)。支持多个，用逗号分隔。<span style="color: #ffb400;">API添加的IP会自动显示在这里。</span>'}</small>
                         </div>
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.preferredIPsURL}</label>
-                                <input type="text" id="yxURL" placeholder="${isFarsi ? 'URL منبع لیست IP ترجیحی را وارد کنید' : '输入优选IP列表来源URL'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                                <small style="color: #00aa00; font-size: 0.85rem;">${isFarsi ? 'URL منبع لیست IP ترجیحی سفارشی، اگر خالی بگذارید از آدرس پیش‌فرض استفاده می‌شود' : '自定义优选IP列表来源URL，留空则使用默认地址'}</small>
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${t.preferredIPsURL}</label>
+                                <input type="text" id="yxURL" placeholder="${isFarsi ? 'URL منبع لیست IP ترجیحی را وارد کنید' : '输入优选IP列表来源URL'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 14px;">
+                                <small style="color: #7aa9c4; font-size: 0.85rem;">${isFarsi ? 'URL منبع لیست IP ترجیحی سفارشی، اگر خالی بگذارید از آدرس پیش‌فرض استفاده می‌شود' : '自定义优选IP列表来源URL，留空则使用默认地址'}</small>
                         </div>
                         
-                        <div style="margin-bottom: 20px; padding: 15px; background: rgba(0, 40, 0, 0.6); border: 2px solid #00aa00; border-radius: 8px;">
-                            <h4 style="color: #00ff00; margin: 0 0 15px 0; font-size: 1.1rem; text-shadow: 0 0 5px #00ff00;">⚡ ${t.latencyTest}</h4>
+                        <div style="margin-bottom: 20px; padding: 15px; background: rgba(20, 5, 50, 0.6); border: 2px solid #7aa9c4; border-radius: 8px;">
+                            <h4 style="color: #00f0ff; margin: 0 0 15px 0; font-size: 1.1rem; text-shadow: 0 0 5px #00f0ff;">⚡ ${t.latencyTest}</h4>
                             <div style="display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; align-items: center;">
                                 <div style="min-width: 120px;">
-                                    <label style="display: block; margin-bottom: 5px; color: #00ff00; font-size: 0.9rem;">${t.ipSource}</label>
-                                    <select id="ipSourceSelect" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 13px; cursor: pointer;">
+                                    <label style="display: block; margin-bottom: 5px; color: #00f0ff; font-size: 0.9rem;">${t.ipSource}</label>
+                                    <select id="ipSourceSelect" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 13px; cursor: pointer;">
                                         <option value="manual">${t.manualInput}</option>
                                         <option value="cfRandom">${t.cfRandomIP}</option>
                                         <option value="urlFetch">${t.urlFetch}</option>
                                     </select>
                                 </div>
                                 <div style="width: 100px;">
-                                    <label style="display: block; margin-bottom: 5px; color: #00ff00; font-size: 0.9rem;">${t.latencyTestPort}</label>
-                                    <input type="number" id="latencyTestPort" value="443" min="1" max="65535" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 13px;">
+                                    <label style="display: block; margin-bottom: 5px; color: #00f0ff; font-size: 0.9rem;">${t.latencyTestPort}</label>
+                                    <input type="number" id="latencyTestPort" value="443" min="1" max="65535" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 13px;">
                                 </div>
                                 <div id="randomCountDiv" style="width: 100px; display: none;">
-                                    <label style="display: block; margin-bottom: 5px; color: #00ff00; font-size: 0.9rem;">${t.randomCount}</label>
-                                    <input type="number" id="randomIPCount" value="20" min="1" max="100" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 13px;">
+                                    <label style="display: block; margin-bottom: 5px; color: #00f0ff; font-size: 0.9rem;">${t.randomCount}</label>
+                                    <input type="number" id="randomIPCount" value="20" min="1" max="100" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 13px;">
                                 </div>
                                 <div style="width: 80px;">
-                                    <label style="display: block; margin-bottom: 5px; color: #00ff00; font-size: 0.9rem;">${isFarsi ? 'رشته‌ها' : '线程'}</label>
-                                    <input type="number" id="testThreads" value="5" min="1" max="50" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 13px;">
+                                    <label style="display: block; margin-bottom: 5px; color: #00f0ff; font-size: 0.9rem;">${isFarsi ? 'رشته‌ها' : '线程'}</label>
+                                    <input type="number" id="testThreads" value="5" min="1" max="50" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 13px;">
                                 </div>
                             </div>
                             <div id="manualInputDiv" style="margin-bottom: 10px;">
-                                <label style="display: block; margin-bottom: 5px; color: #00ff00; font-size: 0.9rem;">${t.latencyTestIP}</label>
-                                <input type="text" id="latencyTestInput" placeholder="${t.latencyTestIPPlaceholder}" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 13px;">
+                                <label style="display: block; margin-bottom: 5px; color: #00f0ff; font-size: 0.9rem;">${t.latencyTestIP}</label>
+                                <input type="text" id="latencyTestInput" placeholder="${t.latencyTestIPPlaceholder}" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 13px;">
                             </div>
                             <div id="urlFetchDiv" style="margin-bottom: 10px; display: none;">
-                                <label style="display: block; margin-bottom: 5px; color: #00ff00; font-size: 0.9rem;">${t.fetchURL}</label>
+                                <label style="display: block; margin-bottom: 5px; color: #00f0ff; font-size: 0.9rem;">${t.fetchURL}</label>
                                 <div style="display: flex; gap: 8px;">
-                                    <input type="text" id="fetchURLInput" placeholder="${t.fetchURLPlaceholder}" style="flex: 1; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 13px;">
+                                    <input type="text" id="fetchURLInput" placeholder="${t.fetchURLPlaceholder}" style="flex: 1; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 13px;">
                                     <button type="button" id="fetchIPBtn" style="background: rgba(0, 200, 255, 0.2); border: 1px solid #00aaff; padding: 8px 16px; color: #00aaff; font-family: 'Courier New', monospace; cursor: pointer; white-space: nowrap;">⬇ ${t.fetchIP}</button>
                                 </div>
                             </div>
                             <div id="cfRandomDiv" style="margin-bottom: 10px; display: none;">
-                                <button type="button" id="generateCFIPBtn" style="background: rgba(0, 255, 0, 0.15); border: 1px solid #00ff00; padding: 10px 20px; color: #00ff00; font-family: 'Courier New', monospace; cursor: pointer; width: 100%; transition: all 0.3s;">🎲 ${t.generateIP}</button>
+                                <button type="button" id="generateCFIPBtn" style="background: rgba(0, 240, 255, 0.15); border: 1px solid #00f0ff; padding: 10px 20px; color: #00f0ff; font-family: 'Courier New', monospace; cursor: pointer; width: 100%; transition: all 0.3s;">🎲 ${t.generateIP}</button>
                             </div>
                             <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                                <button type="button" id="startLatencyTest" style="background: rgba(0, 255, 0, 0.2); border: 1px solid #00ff00; padding: 8px 16px; color: #00ff00; font-family: 'Courier New', monospace; cursor: pointer; transition: all 0.3s;">▶ ${t.startTest}</button>
-                                <button type="button" id="stopLatencyTest" style="background: rgba(255, 0, 0, 0.2); border: 1px solid #ff4444; padding: 8px 16px; color: #ff4444; font-family: 'Courier New', monospace; cursor: pointer; display: none; transition: all 0.3s;">⏹ ${t.stopTest}</button>
+                                <button type="button" id="startLatencyTest" style="background: rgba(0, 240, 255, 0.2); border: 1px solid #00f0ff; padding: 8px 16px; color: #00f0ff; font-family: 'Courier New', monospace; cursor: pointer; transition: all 0.3s;">▶ ${t.startTest}</button>
+                                <button type="button" id="stopLatencyTest" style="background: rgba(255, 0, 0, 0.2); border: 1px solid #ff3860; padding: 8px 16px; color: #ff3860; font-family: 'Courier New', monospace; cursor: pointer; display: none; transition: all 0.3s;">⏹ ${t.stopTest}</button>
                             </div>
-                            <div id="latencyTestStatus" style="color: #00aa00; font-size: 0.9rem; margin-bottom: 10px; display: none;"></div>
+                            <div id="latencyTestStatus" style="color: #7aa9c4; font-size: 0.9rem; margin-bottom: 10px; display: none;"></div>
                             <div id="latencyTestResults" style="max-height: 250px; overflow-y: auto; display: none;">
                                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                                    <span style="color: #00ff00; font-weight: bold;">${t.testResult}</span>
+                                    <span style="color: #00f0ff; font-weight: bold;">${t.testResult}</span>
                                     <div style="display: flex; gap: 8px;">
-                                        <button type="button" id="selectAllResults" style="background: transparent; border: 1px solid #00aa00; padding: 4px 10px; color: #00aa00; font-size: 0.8rem; cursor: pointer;">${t.selectAll}</button>
-                                        <button type="button" id="deselectAllResults" style="background: transparent; border: 1px solid #00aa00; padding: 4px 10px; color: #00aa00; font-size: 0.8rem; cursor: pointer;">${t.deselectAll}</button>
+                                        <button type="button" id="selectAllResults" style="background: transparent; border: 1px solid #7aa9c4; padding: 4px 10px; color: #7aa9c4; font-size: 0.8rem; cursor: pointer;">${t.selectAll}</button>
+                                        <button type="button" id="deselectAllResults" style="background: transparent; border: 1px solid #7aa9c4; padding: 4px 10px; color: #7aa9c4; font-size: 0.8rem; cursor: pointer;">${t.deselectAll}</button>
                                     </div>
                                 </div>
-                                <div id="cityFilterContainer" style="margin-bottom: 10px; padding: 10px; background: rgba(0, 20, 0, 0.6); border: 1px solid #00aa00; border-radius: 4px; display: none;">
+                                <div id="cityFilterContainer" style="margin-bottom: 10px; padding: 10px; background: rgba(15, 3, 40, 0.6); border: 1px solid #7aa9c4; border-radius: 4px; display: none;">
                                     <div style="margin-bottom: 8px;">
-                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00; font-size: 0.9rem;">
+                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff; font-size: 0.9rem;">
                                             <input type="radio" name="cityFilterMode" value="all" checked style="margin-right: 6px; width: 16px; height: 16px; cursor: pointer;">
                                             <span>${isFarsi ? '全部城市' : '全部城市'}</span>
                                         </label>
-                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00; font-size: 0.9rem; margin-left: 15px;">
+                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff; font-size: 0.9rem; margin-left: 15px;">
                                             <input type="radio" name="cityFilterMode" value="fastest10" style="margin-right: 6px; width: 16px; height: 16px; cursor: pointer;">
                                             <span>${isFarsi ? '只选择最快的10个' : '只选择最快的10个'}</span>
                                         </label>
@@ -3041,155 +5139,168 @@
                                 </div>
                                 <div id="latencyResultsList" style="background: rgba(0, 0, 0, 0.5); border: 1px solid #004400; border-radius: 4px; padding: 10px;"></div>
                                 <div style="margin-top: 10px; display: flex; gap: 10px;">
-                                    <button type="button" id="overwriteSelectedToYx" style="flex: 1; background: rgba(0, 200, 0, 0.3); border: 1px solid #00ff00; padding: 10px 20px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; transition: all 0.3s;">${isFarsi ? '覆盖添加' : '覆盖添加'}</button>
-                                    <button type="button" id="appendSelectedToYx" style="flex: 1; background: rgba(0, 150, 0, 0.3); border: 1px solid #00aa00; padding: 10px 20px; color: #00aa00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; transition: all 0.3s;">${isFarsi ? '追加添加' : '追加添加'}</button>
+                                    <button type="button" id="overwriteSelectedToYx" style="flex: 1; background: rgba(0, 220, 130, 0.3); border: 1px solid #00f0ff; padding: 10px 20px; color: #00f0ff; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; transition: all 0.3s;">${isFarsi ? '覆盖添加' : '覆盖添加'}</button>
+                                    <button type="button" id="appendSelectedToYx" style="flex: 1; background: rgba(0, 178, 110, 0.3); border: 1px solid #7aa9c4; padding: 10px 20px; color: #7aa9c4; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; transition: all 0.3s;">${isFarsi ? '追加添加' : '追加添加'}</button>
                                 </div>
                             </div>
                         </div>
 
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.socks5Config}</label>
-                                <input type="text" id="socksConfig" placeholder="${isFarsi ? 'مثال: user:pass@host:port یا host:port' : '例如: user:pass@host:port 或 host:port'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                                <small style="color: #00aa00; font-size: 0.85rem;">${isFarsi ? 'آدرس پروکسی SOCKS5، برای انتقال تمام ترافیک خروجی استفاده می‌شود' : 'SOCKS5代理地址，用于转发所有出站流量'}</small>
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${t.socks5Config}</label>
+                                <input type="text" id="socksConfig" placeholder="${isFarsi ? 'مثال: user:pass@host:port یا host:port' : '例如: user:pass@host:port 或 host:port'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 14px;">
+                                <small style="color: #7aa9c4; font-size: 0.85rem;">${isFarsi ? 'آدرس پروکسی SOCKS5، برای انتقال تمام ترافیک خروجی استفاده می‌شود' : 'SOCKS5代理地址，用于转发所有出站流量'}</small>
                         </div>
-                            <button type="submit" style="background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 12px 24px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; margin-right: 10px; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease;">${t.saveConfig}</button>
                     </form>
 
-                    <h3 style="color: #00ff00; margin: 20px 0 15px 0; font-size: 1.2rem;">${t.advancedControl}</h3>
+                    <h3 style="color: #00f0ff; margin: 20px 0 15px 0; font-size: 1.2rem;">${t.advancedControl}</h3>
                     <form id="advancedConfigForm" style="margin-bottom: 20px;">
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.subscriptionConverter}</label>
-                                <input type="text" id="scu" placeholder="${t.subscriptionConverterPlaceholder}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
-                                <small style="color: #00aa00; font-size: 0.85rem;">${t.subscriptionConverterHint}</small>
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${t.subscriptionConverter}</label>
+                                <input type="text" id="scu" placeholder="${t.subscriptionConverterPlaceholder}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 14px;">
+                                <small style="color: #7aa9c4; font-size: 0.85rem;">${t.subscriptionConverterHint}</small>
                         </div>
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.builtinPreferred}</label>
-                            <div style="padding: 15px; background: rgba(0, 20, 0, 0.6); border: 1px solid #00ff00; border-radius: 5px;">
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${t.builtinPreferred}</label>
+                            <div style="padding: 15px; background: rgba(15, 3, 40, 0.6); border: 1px solid #00f0ff; border-radius: 5px;">
                                 <div style="margin-bottom: 10px;">
-                                    <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                    <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff;">
                                         <input type="checkbox" id="ena" style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                             <span style="font-size: 1.1rem;">${t.enableNativeAddress}</span>
                                     </label>
                                 </div>
                                 <div style="margin-bottom: 10px;">
-                                    <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                    <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff;">
                                         <input type="checkbox" id="epd" style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                             <span style="font-size: 1.1rem;">${t.enablePreferredDomain}</span>
                                     </label>
                                 </div>
                                 <div style="margin-bottom: 10px;">
-                                    <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                    <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff;">
                                         <input type="checkbox" id="epi" checked style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                             <span style="font-size: 1.1rem;">${t.enablePreferredIP}</span>
                                     </label>
                                 </div>
                                 <div style="margin-bottom: 10px;">
-                                    <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                    <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff;">
                                         <input type="checkbox" id="egi" style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                             <span style="font-size: 1.1rem;">${t.enableGitHubPreferred}</span>
                                     </label>
                                 </div>
-                                    <small style="color: #00aa00; font-size: 0.85rem; display: block; margin-top: 10px;">${t.builtinPreferredHint}</small>
+                                    <small style="color: #7aa9c4; font-size: 0.85rem; display: block; margin-top: 10px;">${t.builtinPreferredHint}</small>
                             </div>
                         </div>
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">优选IP筛选设置</label>
-                            <div style="padding: 15px; background: rgba(0, 20, 0, 0.6); border: 1px solid #00ff00; border-radius: 5px;">
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">优选IP筛选设置</label>
+                            <div style="padding: 15px; background: rgba(15, 3, 40, 0.6); border: 1px solid #00f0ff; border-radius: 5px;">
                                 <div style="margin-bottom: 15px;">
-                                    <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">IP版本选择</label>
+                                    <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">IP版本选择</label>
                                     <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff;">
                                             <input type="checkbox" id="ipv4Enabled" checked style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                             <span style="font-size: 1rem;">IPv4</span>
                                         </label>
-                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff;">
                                             <input type="checkbox" id="ipv6Enabled" checked style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                             <span style="font-size: 1rem;">IPv6</span>
                                         </label>
                                     </div>
                                 </div>
                                 <div style="margin-bottom: 10px;">
-                                    <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">运营商选择</label>
+                                    <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">运营商选择</label>
                                     <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff;">
                                             <input type="checkbox" id="ispMobile" checked style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                             <span style="font-size: 1rem;">移动</span>
                                         </label>
-                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff;">
                                             <input type="checkbox" id="ispUnicom" checked style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                             <span style="font-size: 1rem;">联通</span>
                                         </label>
-                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00ff00;">
+                                        <label style="display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff;">
                                             <input type="checkbox" id="ispTelecom" checked style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
                                             <span style="font-size: 1rem;">电信</span>
                                         </label>
                                     </div>
                                 </div>
-                                    <small style="color: #00aa00; font-size: 0.85rem; display: block; margin-top: 10px;">选择要使用的IP版本和运营商，未选中的将被过滤</small>
+                                    <small style="color: #7aa9c4; font-size: 0.85rem; display: block; margin-top: 10px;">选择要使用的IP版本和运营商，未选中的将被过滤</small>
                             </div>
                         </div>
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.allowAPIManagement}</label>
-                            <select id="apiEnabled" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${t.allowAPIManagement}</label>
+                            <select id="apiEnabled" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 14px;">
                                     <option value="">${t.apiEnabledDefault}</option>
                                     <option value="yes">${t.apiEnabledYes}</option>
                             </select>
-                                <small style="color: #ffaa00; font-size: 0.85rem;">${t.apiEnabledHint}</small>
+                                <small style="color: #ffb400; font-size: 0.85rem;">${t.apiEnabledHint}</small>
                         </div>
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.regionMatching}</label>
-                            <select id="regionMatching" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${t.regionMatching}</label>
+                            <select id="regionMatching" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 14px;">
                                     <option value="">${t.regionMatchingDefault}</option>
                                     <option value="no">${t.regionMatchingNo}</option>
                             </select>
-                                <small style="color: #00aa00; font-size: 0.85rem;">${t.regionMatchingHint}</small>
+                                <small style="color: #7aa9c4; font-size: 0.85rem;">${t.regionMatchingHint}</small>
                         </div>
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.downgradeControl}</label>
-                            <select id="downgradeControl" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${t.downgradeControl}</label>
+                            <select id="downgradeControl" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 14px;">
                                     <option value="">${t.downgradeControlDefault}</option>
                                     <option value="no">${t.downgradeControlNo}</option>
                             </select>
-                                <small style="color: #00aa00; font-size: 0.85rem;">${t.downgradeControlHint}</small>
+                                <small style="color: #7aa9c4; font-size: 0.85rem;">${t.downgradeControlHint}</small>
                         </div>
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.tlsControl}</label>
-                            <select id="portControl" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${t.tlsControl}</label>
+                            <select id="portControl" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 14px;">
                                     <option value="">${t.tlsControlDefault}</option>
                                     <option value="yes">${t.tlsControlYes}</option>
                             </select>
-                                <small style="color: #00aa00; font-size: 0.85rem;">${t.tlsControlHint}</small>
+                                <small style="color: #7aa9c4; font-size: 0.85rem;">${t.tlsControlHint}</small>
                         </div>
                         <div style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #00ff00; font-weight: bold; text-shadow: 0 0 3px #00ff00;">${t.preferredControl}</label>
-                            <select id="preferredControl" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00ff00; color: #00ff00; font-family: 'Courier New', monospace; font-size: 14px;">
+                                <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${t.preferredControl}</label>
+                            <select id="preferredControl" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 14px;">
                                     <option value="">${t.preferredControlDefault}</option>
                                     <option value="yes">${t.preferredControlYes}</option>
                             </select>
-                                <small style="color: #00aa00; font-size: 0.85rem;">${t.preferredControlHint}</small>
+                                <small style="color: #7aa9c4; font-size: 0.85rem;">${t.preferredControlHint}</small>
                         </div>
-                            <button type="submit" style="background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 12px 24px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; margin-right: 10px; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease;">${t.saveAdvanced}</button>
                     </form>
-                    <div id="currentConfig" style="background: rgba(0, 0, 0, 0.9); border: 1px solid #00ff00; padding: 15px; margin: 10px 0; font-family: 'Courier New', monospace; color: #00ff00;">
+                    <div id="currentConfig" style="background: rgba(0, 0, 0, 0.9); border: 1px solid #00f0ff; padding: 15px; margin: 10px 0; font-family: 'Courier New', monospace; color: #00f0ff;">
                             ${t.loading}
                     </div>
-                    <div id="pathTypeInfo" style="background: rgba(0, 20, 0, 0.7); border: 1px solid #00ff00; padding: 15px; margin: 10px 0; font-family: 'Courier New', monospace; color: #00ff00;">
-                            <div style="font-weight: bold; margin-bottom: 8px; color: #44ff44; text-shadow: 0 0 5px #44ff44;">${t.currentConfig}</div>
+                    <div id="pathTypeInfo" style="background: rgba(15, 3, 40, 0.7); border: 1px solid #00f0ff; padding: 15px; margin: 10px 0; font-family: 'Courier New', monospace; color: #00f0ff;">
+                            <div style="font-weight: bold; margin-bottom: 8px; color: #00ff9d; text-shadow: 0 0 5px #00ff9d;">${t.currentConfig}</div>
                             <div id="pathTypeStatus">${t.checking}</div>
                     </div>
-                        <button onclick="loadCurrentConfig()" style="background: rgba(0, 255, 0, 0.15); border: 2px solid #00ff00; padding: 12px 24px; color: #00ff00; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; margin-right: 10px; text-shadow: 0 0 8px #00ff00; transition: all 0.4s ease;">${t.refreshConfig}</button>
-                        <button onclick="resetAllConfig()" style="background: rgba(255, 0, 0, 0.15); border: 2px solid #ff0000; padding: 12px 24px; color: #ff0000; font-family: 'Courier New', monospace; font-weight: bold; cursor: pointer; text-shadow: 0 0 8px #ff0000; transition: all 0.4s ease;">${t.resetConfig}</button>
                 </div>
-                <div id="statusMessage" style="display: none; padding: 10px; margin: 10px 0; border: 1px solid #00ff00; background: rgba(0, 20, 0, 0.8); color: #00ff00; text-shadow: 0 0 5px #00ff00;"></div>
+                <div id="statusMessage" style="display: none; padding: 10px; margin: 10px 0; border: 1px solid #00f0ff; background: rgba(8, 4, 28, 0.8); color: #00f0ff; text-shadow: 0 0 5px #00f0ff;"></div>
             </div>
             
             <div class="card">
                     <h2 class="card-title">${t.relatedLinks}</h2>
                 <div style="text-align: center; margin: 20px 0;">
-                        <a href="https://github.com/byJoey/cfnew" target="_blank" style="color: #00ff00; text-decoration: none; margin: 0 20px; font-size: 1.2rem; text-shadow: 0 0 5px #00ff00;">${t.githubProject}</a>
-                    <a href="https://www.youtube.com/@joeyblog" target="_blank" style="color: #00ff00; text-decoration: none; margin: 0 20px; font-size: 1.2rem; text-shadow: 0 0 5px #00ff00;">YouTube @joeyblog</a>
+                        <a href="https://github.com/byJoey/cfnew" target="_blank" style="color: #00f0ff; text-decoration: none; margin: 0 20px; font-size: 1.2rem; text-shadow: 0 0 5px #00f0ff;">${t.githubProject}</a>
+                    <a href="https://www.youtube.com/@joeyblog" target="_blank" style="color: #00f0ff; text-decoration: none; margin: 0 20px; font-size: 1.2rem; text-shadow: 0 0 5px #00f0ff;">YouTube @joeyblog</a>
                 </div>
             </div>
+        </div>
+        <div id="cpToastStack" class="cp-toast-stack" aria-live="polite" aria-atomic="false"></div>
+        <div id="cpActionStatus" class="cp-action-status" role="status" aria-live="polite"></div>
+        <div id="cpActionBar" class="cp-action-bar" role="toolbar" aria-label="${t.configManagement}">
+            <button type="button" id="cpBtnSaveAll" class="cp-fab-save" title="${isFarsi ? 'ذخیره همه تنظیمات' : '保存所有配置 (Ctrl+S)'}">
+                <span class="cp-fab-icon">▣</span>
+                <span>${isFarsi ? 'ذخیره همه' : '保 存 全 部'}</span>
+                <span class="cp-fab-dot" aria-hidden="true"></span>
+            </button>
+            <button type="button" id="cpBtnRefresh" class="cp-action-btn" data-tip="${t.refreshConfig}" aria-label="${t.refreshConfig}">
+                <span aria-hidden="true">↻</span>
+                <span class="cp-btn-label">${t.refreshConfig}</span>
+            </button>
+            <button type="button" id="cpBtnReset" class="cp-action-btn cp-action-btn-danger" data-tip="${t.resetConfig}" aria-label="${t.resetConfig}">
+                <span aria-hidden="true">⌫</span>
+                <span class="cp-btn-label">${t.resetConfig}</span>
+            </button>
         </div>
         <script>
             // 订阅转换地址（从服务器配置注入）
@@ -3268,6 +5379,58 @@
                 }
             });
 
+            // 赛博朋克风 toast 通知 (替代 alert)
+            window.cpToast = function(message, type, options) {
+                options = options || {};
+                var stack = document.getElementById('cpToastStack');
+                if (!stack) return;
+                var typeMap = { success: '✓', info: '⌬', warn: '⚠', error: '✕' };
+                var titleMap = { success: 'SUCCESS', info: 'INFO', warn: 'WARN', error: 'ERROR' };
+                type = typeMap[type] ? type : 'success';
+                var duration = options.duration || 3200;
+                var toast = document.createElement('div');
+                toast.className = 'cp-toast cp-toast-' + type;
+                toast.style.setProperty('--cp-toast-dur', duration + 'ms');
+                var icon = document.createElement('span');
+                icon.className = 'cp-toast-icon';
+                icon.textContent = typeMap[type];
+                var body = document.createElement('div');
+                body.className = 'cp-toast-body';
+                var title = document.createElement('div');
+                title.className = 'cp-toast-title';
+                title.textContent = options.title || titleMap[type];
+                var msg = document.createElement('div');
+                msg.className = 'cp-toast-msg';
+                msg.textContent = String(message == null ? '' : message);
+                body.appendChild(title);
+                body.appendChild(msg);
+                var close = document.createElement('button');
+                close.type = 'button';
+                close.className = 'cp-toast-close';
+                close.setAttribute('aria-label', 'close');
+                close.textContent = '✕';
+                toast.appendChild(icon);
+                toast.appendChild(body);
+                toast.appendChild(close);
+                stack.appendChild(toast);
+                requestAnimationFrame(function() { toast.classList.add('cp-show'); });
+                var dismissed = false;
+                function dismiss() {
+                    if (dismissed) return;
+                    dismissed = true;
+                    toast.classList.remove('cp-show');
+                    toast.classList.add('cp-hide');
+                    setTimeout(function() {
+                        if (toast.parentNode) toast.parentNode.removeChild(toast);
+                    }, 400);
+                }
+                close.addEventListener('click', dismiss);
+                var timer = setTimeout(dismiss, duration);
+                toast.addEventListener('mouseenter', function() { clearTimeout(timer); });
+                toast.addEventListener('mouseleave', function() { timer = setTimeout(dismiss, 1200); });
+                return { dismiss: dismiss, element: toast };
+            };
+
             function tryOpenApp(schemeUrl, fallbackCallback, timeout) {
                 timeout = timeout || 2500;
                 var appOpened = false;
@@ -3333,46 +5496,43 @@
 
                     if (clientName === 'V2RAY') {
                         navigator.clipboard.writeText(finalUrl).then(function() {
-                            alert(displayName + " " + t.subscriptionCopied);
+                            cpToast(displayName + " " + t.subscriptionCopied, 'success');
                         });
                     } else if (clientName === 'Shadowrocket') {
                         schemeUrl = 'shadowrocket://add/' + encodeURIComponent(finalUrl);
                         tryOpenApp(schemeUrl, function() {
                             navigator.clipboard.writeText(finalUrl).then(function() {
-                                alert(displayName + " " + t.subscriptionCopied);
+                                cpToast(displayName + " " + t.subscriptionCopied, 'success');
                             });
                         });
                     } else if (clientName === 'V2RAYNG') {
                         schemeUrl = 'v2rayng://install?url=' + encodeURIComponent(finalUrl);
                         tryOpenApp(schemeUrl, function() {
                             navigator.clipboard.writeText(finalUrl).then(function() {
-                                alert(displayName + " " + t.subscriptionCopied);
+                                cpToast(displayName + " " + t.subscriptionCopied, 'success');
                             });
                         });
                     } else if (clientName === 'NEKORAY') {
                         schemeUrl = 'nekoray://install-config?url=' + encodeURIComponent(finalUrl);
                         tryOpenApp(schemeUrl, function() {
                             navigator.clipboard.writeText(finalUrl).then(function() {
-                                alert(displayName + " " + t.subscriptionCopied);
+                                cpToast(displayName + " " + t.subscriptionCopied, 'success');
                             });
                         });
                     }
                 } else {
-                    // 检查 ECH 是否开启
-                    var echEnabled = document.getElementById('ech') && document.getElementById('ech').checked;
+                    // 统一走内部订阅转换 (?target=xxx)，不再依赖外部 sub-converter
+                    finalUrl = subscriptionUrl + (subscriptionUrl.includes('?') ? '&' : '?') + "target=" + clientType;
+                    var urlElement = document.getElementById("clientSubscriptionUrl");
+                    urlElement.textContent = finalUrl;
+                    urlElement.style.display = "block";
+                    urlElement.style.overflowWrap = "break-word";
+                    urlElement.style.wordBreak = "break-all";
+                    urlElement.style.overflowX = "auto";
+                    urlElement.style.maxWidth = "100%";
+                    urlElement.style.boxSizing = "border-box";
 
-                    // 如果 ECH 开启且是 Clash，直接使用后端接口
-                    if (echEnabled && clientType === atob('Y2xhc2g=')) {
-                        finalUrl = subscriptionUrl + "?target=" + clientType;
-                        var urlElement = document.getElementById("clientSubscriptionUrl");
-                        urlElement.textContent = finalUrl;
-                        urlElement.style.display = "block";
-                        urlElement.style.overflowWrap = "break-word";
-                        urlElement.style.wordBreak = "break-all";
-                        urlElement.style.overflowX = "auto";
-                        urlElement.style.maxWidth = "100%";
-                        urlElement.style.boxSizing = "border-box";
-
+                    if (clientType === atob('Y2xhc2g=')) {
                         if (clientName === 'STASH') {
                             schemeUrl = 'stash://install?url=' + encodeURIComponent(finalUrl);
                             displayName = 'STASH';
@@ -3380,108 +5540,112 @@
                             schemeUrl = 'clash://install-config?url=' + encodeURIComponent(finalUrl);
                             displayName = 'CLASH';
                         }
+                    } else if (clientType === atob('c3VyZ2U=')) {
+                        schemeUrl = 'surge:///install-config?url=' + encodeURIComponent(finalUrl);
+                        displayName = 'SURGE';
+                    } else if (clientType === atob('c2luZ2JveA==')) {
+                        schemeUrl = 'sing-box://install-config?url=' + encodeURIComponent(finalUrl);
+                        displayName = 'SING-BOX';
+                    } else if (clientType === atob('bG9vbg==')) {
+                        schemeUrl = 'loon://install?url=' + encodeURIComponent(finalUrl);
+                        displayName = 'LOON';
+                    } else if (clientType === atob('cXVhbng=')) {
+                        schemeUrl = 'quantumult-x://install-config?url=' + encodeURIComponent(finalUrl);
+                        displayName = 'QUANTUMULT X';
+                    }
 
-                        if (schemeUrl) {
-                            tryOpenApp(schemeUrl, function() {
-                                navigator.clipboard.writeText(finalUrl).then(function() {
-                                    alert(displayName + " " + t.subscriptionCopied);
-                                });
-                            });
-                        } else {
+                    if (schemeUrl) {
+                        tryOpenApp(schemeUrl, function() {
                             navigator.clipboard.writeText(finalUrl).then(function() {
-                                    alert(displayName + " " + t.subscriptionCopied);
+                                cpToast(displayName + " " + t.subscriptionCopied, 'success');
                             });
-                        }
+                        });
                     } else {
-                        // 其他情况使用订阅转换服务
-                        var encodedUrl = encodeURIComponent(subscriptionUrl);
-                        finalUrl = SUB_CONVERTER_URL + "?target=" + clientType + "&url=" + encodedUrl + "&insert=false&config=" + encodeURIComponent(REMOTE_CONFIG_URL) + "&emoji=true&list=false&xudp=false&udp=false&tfo=false&expand=true&scv=false&fdn=false&new_name=true";
-                        var urlElement = document.getElementById("clientSubscriptionUrl");
-                        urlElement.textContent = finalUrl;
-                        urlElement.style.display = "block";
-                        urlElement.style.overflowWrap = "break-word";
-                        urlElement.style.wordBreak = "break-all";
-                        urlElement.style.overflowX = "auto";
-                        urlElement.style.maxWidth = "100%";
-                        urlElement.style.boxSizing = "border-box";
-
-                        if (clientType === atob('Y2xhc2g=')) {
-                            if (clientName === 'STASH') {
-                                schemeUrl = 'stash://install?url=' + encodeURIComponent(finalUrl);
-                                displayName = 'STASH';
-                            } else {
-                                schemeUrl = 'clash://install-config?url=' + encodeURIComponent(finalUrl);
-                                displayName = 'CLASH';
-                            }
-                        } else if (clientType === atob('c3VyZ2U=')) {
-                            schemeUrl = 'surge:///install-config?url=' + encodeURIComponent(finalUrl);
-                            displayName = 'SURGE';
-                        } else if (clientType === atob('c2luZ2JveA==')) {
-                            schemeUrl = 'sing-box://install-config?url=' + encodeURIComponent(finalUrl);
-                            displayName = 'SING-BOX';
-                        } else if (clientType === atob('bG9vbg==')) {
-                            schemeUrl = 'loon://install?url=' + encodeURIComponent(finalUrl);
-                            displayName = 'LOON';
-                        } else if (clientType === atob('cXVhbng=')) {
-                            schemeUrl = 'quantumult-x://install-config?url=' + encodeURIComponent(finalUrl);
-                            displayName = 'QUANTUMULT X';
-                        }
-                        
-                        if (schemeUrl) {
-                            tryOpenApp(schemeUrl, function() {
-                                navigator.clipboard.writeText(finalUrl).then(function() {
-                                    alert(displayName + " " + t.subscriptionCopied);
-                                });
-                            });
-                        } else {
-                            navigator.clipboard.writeText(finalUrl).then(function() {
-                                alert(displayName + " " + t.subscriptionCopied);
-                            });
-                        }
+                        navigator.clipboard.writeText(finalUrl).then(function() {
+                            cpToast(displayName + " " + t.subscriptionCopied, 'success');
+                        });
                     }
                 }
             }
 
+            // 页面特效图形化开关 (localStorage 持久化)
+            window.cpApplyFx = function() {
+                var off = localStorage.getItem('cp-fx-off') === '1';
+                document.body.classList.toggle('fx-off', off);
+                var lbl = document.getElementById('cpFxLabel');
+                if (lbl) lbl.textContent = off ? 'FX: OFF' : 'FX: ON';
+                if (off) {
+                    var rain = document.getElementById('matrixCodeRain');
+                    if (rain) rain.innerHTML = '';
+                } else if (typeof createMatrixRain === 'function') {
+                    var r = document.getElementById('matrixCodeRain');
+                    if (r && !r.firstChild) createMatrixRain();
+                }
+            };
+            window.cpToggleFx = function() {
+                var off = localStorage.getItem('cp-fx-off') === '1';
+                localStorage.setItem('cp-fx-off', off ? '0' : '1');
+                window.cpApplyFx();
+            };
+            (function() {
+                if (localStorage.getItem('cp-fx-off') === '1') {
+                    document.addEventListener('DOMContentLoaded', function() {
+                        document.body.classList.add('fx-off');
+                        var lbl = document.getElementById('cpFxLabel');
+                        if (lbl) lbl.textContent = 'FX: OFF';
+                    });
+                }
+            })();
+
             function createMatrixRain() {
+                if (document.body && document.body.classList.contains('fx-off')) return;
                 const matrixContainer = document.getElementById('matrixCodeRain');
-                const matrixChars = '01ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-                const columns = Math.floor(window.innerWidth / 18);
+                if (!matrixContainer) return;
+                const cyberChars = '01アイウエオカキクケコサシスセソタチツテトナニヌネノ$%#@!?<>+=ABCDEF';
+                const palette = ['#00f0ff', '#ff2bd6', '#a347ff', '#00ff9d'];
+                const columns = Math.floor(window.innerWidth / 20);
 
                 for (let i = 0; i < columns; i++) {
                     const column = document.createElement('div');
                     column.className = 'matrix-column';
-                    column.style.left = (i * 18) + 'px';
-                    column.style.animationDelay = Math.random() * 15 + 's';
-                    column.style.animationDuration = (Math.random() * 15 + 8) + 's';
+                    column.style.left = (i * 20) + 'px';
+                    column.style.animationDelay = (-Math.random() * 15) + 's';
+                    column.style.animationDuration = (Math.random() * 14 + 8) + 's';
                     column.style.fontSize = (Math.random() * 4 + 12) + 'px';
-                    column.style.opacity = Math.random() * 0.8 + 0.2;
+                    column.style.opacity = (Math.random() * 0.7 + 0.3).toFixed(2);
 
                     let text = '';
-                    const charCount = Math.floor(Math.random() * 30 + 20);
+                    const charCount = Math.floor(Math.random() * 30 + 18);
                     for (let j = 0; j < charCount; j++) {
-                        const char = matrixChars[Math.floor(Math.random() * matrixChars.length)];
-                        const brightness = Math.random() > 0.1 ? '#00ff00' : '#00aa00';
-                        text += '<span style="color: ' + brightness + ';">' + char + '</span><br>';
+                        const char = cyberChars[Math.floor(Math.random() * cyberChars.length)];
+                        const useAccent = Math.random() > 0.85;
+                        const color = useAccent ? palette[Math.floor(Math.random() * palette.length)] : '';
+                        text += color
+                            ? ('<span style="color:' + color + ';text-shadow:0 0 8px ' + color + ';">' + char + '</span><br>')
+                            : ('<span>' + char + '</span><br>');
                     }
                     column.innerHTML = text;
                     matrixContainer.appendChild(column);
                 }
 
                 setInterval(function() {
-                    const columns = matrixContainer.querySelectorAll('.matrix-column');
-                    columns.forEach(function(column) {
-                        if (Math.random() > 0.95) {
+                    const cols = matrixContainer.querySelectorAll('.matrix-column');
+                    cols.forEach(function(column) {
+                        if (Math.random() > 0.94) {
                             const chars = column.querySelectorAll('span');
                             if (chars.length > 0) {
-                                const randomChar = chars[Math.floor(Math.random() * chars.length)];
-                                randomChar.style.color = '#ffffff';
+                                const target = chars[Math.floor(Math.random() * chars.length)];
+                                const prev = target.style.color;
+                                target.style.color = '#ffffff';
+                                target.style.textShadow = '0 0 10px #ffffff, 0 0 18px #00f0ff';
                                 setTimeout(function() {
-                                    randomChar.style.color = '#00ff00';
+                                    target.style.color = prev;
+                                    target.style.textShadow = '';
                                 }, 200);
                             }
                         }
                     });
-                }, 100);
+                }, 110);
             }
 
             async function checkSystemStatus() {
@@ -3581,51 +5745,51 @@
 
                             // 获取自定义IP的详细信息
                             const customIPInfo = data.ci || t.unknown;
-                            geoInfo.innerHTML = t.detectionMethod + '<span style="color: #ffaa00;">⚙️ ' + t.customIPMode + '</span>';
-                            regionStatus.innerHTML = t.workerRegion + '<span style="color: #ffaa00;">🔧 ' + t.customIPModeDesc + '</span>';
+                            geoInfo.innerHTML = t.detectionMethod + '<span style="color: #ffb400;">⚙️ ' + t.customIPMode + '</span>';
+                            regionStatus.innerHTML = t.workerRegion + '<span style="color: #ffb400;">🔧 ' + t.customIPModeDesc + '</span>';
 
                             // 显示自定义IP配置状态，包含具体IP
-                            if (backupStatus) backupStatus.innerHTML = t.proxyIPStatus + '<span style="color: #ffaa00;">🔧 ' + t.usingCustomProxyIP + customIPInfo + '</span>';
-                            if (currentIP) currentIP.innerHTML = t.currentIP + '<span style="color: #ffaa00;">✅ ' + customIPInfo + t.customIPConfig + '</span>';
-                            if (regionMatch) regionMatch.innerHTML = t.regionMatch + '<span style="color: #ffaa00;">⚠️ ' + t.customIPModeDisabled + '</span>';
+                            if (backupStatus) backupStatus.innerHTML = t.proxyIPStatus + '<span style="color: #ffb400;">🔧 ' + t.usingCustomProxyIP + customIPInfo + '</span>';
+                            if (currentIP) currentIP.innerHTML = t.currentIP + '<span style="color: #ffb400;">✅ ' + customIPInfo + t.customIPConfig + '</span>';
+                            if (regionMatch) regionMatch.innerHTML = t.regionMatch + '<span style="color: #ffb400;">⚠️ ' + t.customIPModeDisabled + '</span>';
 
                             return; // 提前返回，不执行后续的地区匹配逻辑
                         } else if (data.detectionMethod === '手动指定地区' || data.detectionMethod === 'تعیین منطقه دستی') {
                             isManualRegionMode = true;
                             detectedRegion = data.region;
 
-                            geoInfo.innerHTML = t.detectionMethod + '<span style="color: #44aa44;">' + t.manualRegion + '</span>';
-                            regionStatus.innerHTML = t.workerRegion + '<span style="color: #44ff44;">🎯 ' + t.regionNames[detectedRegion] + t.manualRegionDesc + '</span>';
+                            geoInfo.innerHTML = t.detectionMethod + '<span style="color: #00b380;">' + t.manualRegion + '</span>';
+                            regionStatus.innerHTML = t.workerRegion + '<span style="color: #00ff9d;">🎯 ' + t.regionNames[detectedRegion] + t.manualRegionDesc + '</span>';
 
                             // 显示配置状态而不是检测状态
-                            if (backupStatus) backupStatus.innerHTML = t.proxyIPStatus + '<span style="color: #44ff44;">✅ ' + t.proxyIPAvailable + '</span>';
-                            if (currentIP) currentIP.innerHTML = t.currentIP + '<span style="color: #44ff44;">✅ ' + t.smartSelection + '</span>';
-                            if (regionMatch) regionMatch.innerHTML = t.regionMatch + '<span style="color: #44ff44;">✅ ' + t.sameRegionIP + '</span>';
+                            if (backupStatus) backupStatus.innerHTML = t.proxyIPStatus + '<span style="color: #00ff9d;">✅ ' + t.proxyIPAvailable + '</span>';
+                            if (currentIP) currentIP.innerHTML = t.currentIP + '<span style="color: #00ff9d;">✅ ' + t.smartSelection + '</span>';
+                            if (regionMatch) regionMatch.innerHTML = t.regionMatch + '<span style="color: #00ff9d;">✅ ' + t.sameRegionIP + '</span>';
 
                             return; // 提前返回，不执行后续的地区匹配逻辑
                         } else if (data.region && t.regionNames[data.region]) {
                             detectedRegion = data.region;
                     }
 
-                    geoInfo.innerHTML = t.detectionMethod + '<span style="color: #44ff44;">' + t.cloudflareDetection + '</span>';
+                    geoInfo.innerHTML = t.detectionMethod + '<span style="color: #00ff9d;">' + t.cloudflareDetection + '</span>';
 
                     } catch (e) {
-                        geoInfo.innerHTML = t.detectionMethod + '<span style="color: #ff4444;">' + t.detectionFailed + '</span>';
+                        geoInfo.innerHTML = t.detectionMethod + '<span style="color: #ff3860;">' + t.detectionFailed + '</span>';
                     }
 
-                    regionStatus.innerHTML = t.workerRegion + '<span style="color: #44ff44;">✅ ' + t.regionNames[detectedRegion] + '</span>';
+                    regionStatus.innerHTML = t.workerRegion + '<span style="color: #00ff9d;">✅ ' + t.regionNames[detectedRegion] + '</span>';
 
                     // 直接显示配置状态，不再进行检测
                     if (backupStatus) {
-                        backupStatus.innerHTML = t.proxyIPStatus + '<span style="color: #44ff44;">✅ ' + t.proxyIPAvailable + '</span>';
+                        backupStatus.innerHTML = t.proxyIPStatus + '<span style="color: #00ff9d;">✅ ' + t.proxyIPAvailable + '</span>';
                     }
 
                     if (currentIP) {
-                        currentIP.innerHTML = t.currentIP + '<span style="color: #44ff44;">✅ ' + t.smartSelection + '</span>';
+                        currentIP.innerHTML = t.currentIP + '<span style="color: #00ff9d;">✅ ' + t.smartSelection + '</span>';
                     }
 
                     if (regionMatch) {
-                        regionMatch.innerHTML = t.regionMatch + '<span style="color: #44ff44;">✅ ' + t.sameRegionIP + '</span>';
+                        regionMatch.innerHTML = t.regionMatch + '<span style="color: #00ff9d;">✅ ' + t.sameRegionIP + '</span>';
                     }
                 } catch (error) {
                     function getCookie(name) {
@@ -3666,11 +5830,11 @@
 
                     const t = translations[isFarsi ? 'fa' : 'zh'];
 
-                    document.getElementById('regionStatus').innerHTML = t.workerRegion + '<span style="color: #ff4444;">❌ ' + t.detectionFailed + '</span>';
-                    document.getElementById('geoInfo').innerHTML = t.detectionMethod + '<span style="color: #ff4444;">❌ ' + t.detectionFailed + '</span>';
-                    document.getElementById('backupStatus').innerHTML = t.proxyIPStatus + '<span style="color: #ff4444;">❌ ' + t.detectionFailed + '</span>';
-                    document.getElementById('currentIP').innerHTML = t.currentIP + '<span style="color: #ff4444;">❌ ' + t.detectionFailed + '</span>';
-                    document.getElementById('regionMatch').innerHTML = t.regionMatch + '<span style="color: #ff4444;">❌ ' + t.detectionFailed + '</span>';
+                    document.getElementById('regionStatus').innerHTML = t.workerRegion + '<span style="color: #ff3860;">❌ ' + t.detectionFailed + '</span>';
+                    document.getElementById('geoInfo').innerHTML = t.detectionMethod + '<span style="color: #ff3860;">❌ ' + t.detectionFailed + '</span>';
+                    document.getElementById('backupStatus').innerHTML = t.proxyIPStatus + '<span style="color: #ff3860;">❌ ' + t.detectionFailed + '</span>';
+                    document.getElementById('currentIP').innerHTML = t.currentIP + '<span style="color: #ff3860;">❌ ' + t.detectionFailed + '</span>';
+                    document.getElementById('regionMatch').innerHTML = t.regionMatch + '<span style="color: #ff3860;">❌ ' + t.detectionFailed + '</span>';
                 }
             }
 
@@ -3716,9 +5880,9 @@
                     const data = await response.json();
 
                     if (data.detectedRegion) {
-                        alert(t.apiTestResult + data.detectedRegion + '\\n' + t.apiTestTime + data.timestamp);
+                        cpToast(t.apiTestResult + data.detectedRegion + '\\n' + t.apiTestTime + data.timestamp, 'info', { duration: 5000 });
                     } else {
-                        alert(t.apiTestFailed + (data.error || t.unknownError));
+                        cpToast(t.apiTestFailed + (data.error || t.unknownError), 'error', { duration: 4500 });
                     }
                 } catch (error) {
                     function getCookie(name) {
@@ -3744,7 +5908,7 @@
                     };
 
                     const t = translations[isFarsi ? 'fa' : 'zh'];
-                    alert(t.apiTestError + error.message);
+                    cpToast(t.apiTestError + error.message, 'error', { duration: 4500 });
                 }
             }
             
@@ -3797,7 +5961,7 @@
 
                     if (response.status === 503) {
                         // KV未配置
-                        document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">' + t.kvDisabled + '</span>';
+                        document.getElementById('kvStatus').innerHTML = '<span style="color: #ffb400;">' + t.kvDisabled + '</span>';
                         document.getElementById('configCard').style.display = 'block';
                         document.getElementById('currentConfig').textContent = t.kvNotConfigured;
                     } else if (response.ok) {
@@ -3806,22 +5970,22 @@
 
                         // 检查响应是否包含KV配置信息
                         if (data && data.kvEnabled === true) {
-                            document.getElementById('kvStatus').innerHTML = '<span style="color: #44ff44;">' + t.kvEnabled + '</span>';
+                            document.getElementById('kvStatus').innerHTML = '<span style="color: #00ff9d;">' + t.kvEnabled + '</span>';
                             document.getElementById('configContent').style.display = 'block';
                             document.getElementById('configCard').style.display = 'block';
                             await loadCurrentConfig();
                         } else {
-                            document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">' + t.kvDisabled + '</span>';
+                            document.getElementById('kvStatus').innerHTML = '<span style="color: #ffb400;">' + t.kvDisabled + '</span>';
                             document.getElementById('configCard').style.display = 'block';
                             document.getElementById('currentConfig').textContent = t.kvNotEnabled;
                         }
                     } catch (jsonError) {
-                        document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">' + t.kvCheckFailed + '</span>';
+                        document.getElementById('kvStatus').innerHTML = '<span style="color: #ffb400;">' + t.kvCheckFailed + '</span>';
                         document.getElementById('configCard').style.display = 'block';
                         document.getElementById('currentConfig').textContent = t.kvCheckFailedFormat;
                         }
                     } else {
-                        document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">' + t.kvDisabled + '</span>';
+                        document.getElementById('kvStatus').innerHTML = '<span style="color: #ffb400;">' + t.kvDisabled + '</span>';
                         document.getElementById('configCard').style.display = 'block';
                         document.getElementById('currentConfig').textContent = t.kvCheckFailedStatus + response.status;
                     }
@@ -3856,7 +6020,7 @@
 
                     const t = translations[isFarsi ? 'fa' : 'zh'];
 
-                    document.getElementById('kvStatus').innerHTML = '<span style="color: #ffaa00;">' + t.kvDisabled + '</span>';
+                    document.getElementById('kvStatus').innerHTML = '<span style="color: #ffb400;">' + t.kvDisabled + '</span>';
                     document.getElementById('configCard').style.display = 'block';
                     document.getElementById('currentConfig').textContent = t.kvCheckFailedError + error.message;
                 }
@@ -3910,6 +6074,9 @@
                     if (document.getElementById('customECHDomain')) {
                         document.getElementById('customECHDomain').value = config.customECHDomain || '';
                     }
+                    if (document.getElementById('alpn')) {
+                        document.getElementById('alpn').value = config.alpn || '';
+                    }
                     document.getElementById('scu').value = config.scu || '';
                     document.getElementById('ena').checked = config.ena === 'yes';
                     document.getElementById('epd').checked = config.epd !== 'no';
@@ -3952,15 +6119,15 @@
 
                 if (cp && cp.trim()) {
                     // 使用自定义路径 (d)
-                    pathTypeStatus.innerHTML = '<div style="color: #44ff44;">使用类型: <strong>自定义路径 (d)</strong></div>' +
-                        '<div style="margin-top: 5px; color: #00ff00;">当前路径: <span style="color: #ffaa00;">' + cp + '</span></div>' +
-                        '<div style="margin-top: 5px; font-size: 0.9rem; color: #00aa00;">访问地址: ' + 
+                    pathTypeStatus.innerHTML = '<div style="color: #00ff9d;">使用类型: <strong>自定义路径 (d)</strong></div>' +
+                        '<div style="margin-top: 5px; color: #00f0ff;">当前路径: <span style="color: #ffb400;">' + cp + '</span></div>' +
+                        '<div style="margin-top: 5px; font-size: 0.9rem; color: #7aa9c4;">访问地址: ' + 
                         (currentUrl.split('/')[0] + '//' + currentUrl.split('/')[2]) + cp + '/sub</div>';
                 } else {
                     // 使用 UUID (u)
-                    pathTypeStatus.innerHTML = '<div style="color: #44ff44;">使用类型: <strong>UUID 路径 (u)</strong></div>' +
-                        '<div style="margin-top: 5px; color: #00ff00;">当前路径: <span style="color: #ffaa00;">' + (currentPath || '(UUID)') + '</span></div>' +
-                        '<div style="margin-top: 5px; font-size: 0.9rem; color: #00aa00;">访问地址: ' + currentUrl.split('/sub')[0] + '/sub</div>';
+                    pathTypeStatus.innerHTML = '<div style="color: #00ff9d;">使用类型: <strong>UUID 路径 (u)</strong></div>' +
+                        '<div style="margin-top: 5px; color: #00f0ff;">当前路径: <span style="color: #ffb400;">' + (currentPath || '(UUID)') + '</span></div>' +
+                        '<div style="margin-top: 5px; font-size: 0.9rem; color: #7aa9c4;">访问地址: ' + currentUrl.split('/sub')[0] + '/sub</div>';
                 }
             }
 
@@ -3982,7 +6149,7 @@
                         // 显示提示信息
                         if (wkRegionHint) {
                             wkRegionHint.style.display = 'block';
-                            wkRegionHint.style.color = '#ffaa00';
+                            wkRegionHint.style.color = '#ffb400';
                         }
                     } else {
                         wkRegion.style.opacity = '1';
@@ -4046,14 +6213,20 @@
 
             function showStatus(message, type) {
                 const statusDiv = document.getElementById('statusMessage');
-                statusDiv.textContent = message;
-                statusDiv.style.display = 'block';
-                statusDiv.style.color = type === 'success' ? '#00ff00' : '#ff0000';
-                statusDiv.style.borderColor = type === 'success' ? '#00ff00' : '#ff0000';
+                if (statusDiv) {
+                    statusDiv.textContent = message;
+                    statusDiv.style.display = 'block';
+                    statusDiv.style.color = type === 'success' ? '#00f0ff' : '#ff3860';
+                    statusDiv.style.borderColor = type === 'success' ? '#00f0ff' : '#ff3860';
 
-                setTimeout(function() {
-                    statusDiv.style.display = 'none';
-                }, 3000);
+                    setTimeout(function() {
+                        statusDiv.style.display = 'none';
+                    }, 3000);
+                }
+                // 同步在底部操作条上方弹出霓虹反馈
+                if (typeof window.flashActionStatus === 'function') {
+                    window.flashActionStatus(message, type === 'success' ? 'ok' : 'err');
+                }
             }
 
             async function resetAllConfig() {
@@ -4074,7 +6247,8 @@
                                 dkby: '',
                                 yxby: '', ev: '', et: '', ex: '', tp: '', scu: '', epd: '', epi: '', egi: '',
                                 ipv4: '', ipv6: '', ispMobile: '', ispUnicom: '', ispTelecom: '',
-                                homepage: ''
+                                homepage: '',
+                                alpn: ''
                             })
                         });
 
@@ -4124,7 +6298,7 @@
                     const currentUrl = window.location.href;
                     const subscriptionUrl = currentUrl + '/sub';
 
-                    echStatusEl.innerHTML = 'ECH状态: <span style="color: #ffaa00;">检测中...</span>';
+                    echStatusEl.innerHTML = 'ECH状态: <span style="color: #ffb400;">检测中...</span>';
 
                     const response = await fetch(subscriptionUrl, {
                         method: 'GET',
@@ -4137,12 +6311,12 @@
                     const echConfigLength = response.headers.get('X-ECH-Config-Length');
 
                     if (echStatusHeader === 'ENABLED') {
-                        echStatusEl.innerHTML = 'ECH状态: <span style="color: #44ff44;">✅ 已启用' + (echConfigLength ? ' (配置长度: ' + echConfigLength + ')' : '') + '</span>';
+                        echStatusEl.innerHTML = 'ECH状态: <span style="color: #00ff9d;">✅ 已启用' + (echConfigLength ? ' (配置长度: ' + echConfigLength + ')' : '') + '</span>';
                     } else {
-                        echStatusEl.innerHTML = 'ECH状态: <span style="color: #ffaa00;">⚠️ 未启用</span>';
+                        echStatusEl.innerHTML = 'ECH状态: <span style="color: #ffb400;">⚠️ 未启用</span>';
                     }
                 } catch (error) {
-                    echStatusEl.innerHTML = 'ECH状态: <span style="color: #ff4444;">❌ 检测失败: ' + error.message + '</span>';
+                    echStatusEl.innerHTML = 'ECH状态: <span style="color: #ff3860;">❌ 检测失败: ' + error.message + '</span>';
                 }
             }
 
@@ -4177,86 +6351,136 @@
                     });
                 }
 
-                // 绑定表单事件
-                const regionForm = document.getElementById('regionForm');
-                if (regionForm) {
-                    regionForm.addEventListener('submit', async function(e) {
-                        e.preventDefault();
-                        const wkRegion = document.getElementById('wkRegion').value;
-                        await saveConfig({ wk: wkRegion });
-                    });
-                }
+                // 阻止表单默认提交（保存按钮已统一到底部操作条）
+                ['regionForm', 'otherConfigForm', 'advancedConfigForm'].forEach(function(fid) {
+                    const f = document.getElementById(fid);
+                    if (f) f.addEventListener('submit', function(e) { e.preventDefault(); });
+                });
 
-                const saveProtocolBtn = document.getElementById('saveProtocolBtn');
-                if (saveProtocolBtn) {
-                    saveProtocolBtn.addEventListener('click', async function(e) {
-                        e.preventDefault();
-                        const configData = { 
-                            ev: document.getElementById('ev').checked ? 'yes' : 'no', 
-                            et: document.getElementById('et').checked ? 'yes' : 'no', 
-                            ex: document.getElementById('ex').checked ? 'yes' : 'no', 
-                            ech: document.getElementById('ech').checked ? 'yes' : 'no',
-                            tp: document.getElementById('tp').value,
-                            customDNS: document.getElementById('customDNS').value,
-                            customECHDomain: document.getElementById('customECHDomain').value
-                        };
-
-                        if (!document.getElementById('ev').checked && 
-                            !document.getElementById('et').checked && 
-                            !document.getElementById('ex').checked) {
-                            alert('至少需要启用一个协议！');
-                            return;
+                // 在任意输入框按下回车，触发统一保存
+                document.querySelectorAll('#configContent input[type="text"], #configContent input[type="number"]').forEach(function(el) {
+                    el.addEventListener('keydown', function(e) {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            saveAllConfig();
                         }
-
-                        await saveConfig(configData);
                     });
+                });
+
+                // 统一保存：一次性收齐所有字段
+                function collectAllConfig() {
+                    function val(id) { const el = document.getElementById(id); return el ? el.value : ''; }
+                    function chk(id, def) { const el = document.getElementById(id); if (!el) return def; return el.checked ? 'yes' : 'no'; }
+                    return {
+                        wk: val('wkRegion'),
+                        ev: chk('ev', 'yes'), et: chk('et', 'no'), ex: chk('ex', 'no'), ech: chk('ech', 'no'),
+                        tp: val('tp'),
+                        customDNS: val('customDNS'),
+                        customECHDomain: val('customECHDomain'),
+                        alpn: val('alpn'),
+                        d: val('customPath'),
+                        p: val('customIP'),
+                        yx: val('yx'),
+                        yxURL: val('yxURL'),
+                        s: val('socksConfig'),
+                        homepage: val('customHomepage'),
+                        scu: val('scu'),
+                        ena: chk('ena', 'no'),
+                        epd: chk('epd', 'yes'), epi: chk('epi', 'yes'), egi: chk('egi', 'yes'),
+                        ae: val('apiEnabled'),
+                        rm: val('regionMatching'),
+                        qj: val('downgradeControl'),
+                        dkby: val('portControl'),
+                        yxby: val('preferredControl'),
+                        ipv4: chk('ipv4Enabled', 'yes'), ipv6: chk('ipv6Enabled', 'yes'),
+                        ispMobile: chk('ispMobile', 'yes'), ispUnicom: chk('ispUnicom', 'yes'), ispTelecom: chk('ispTelecom', 'yes')
+                    };
                 }
 
-                const otherConfigForm = document.getElementById('otherConfigForm');
-                if (otherConfigForm) {
-                    otherConfigForm.addEventListener('submit', async function(e) {
-                        e.preventDefault();
-                        const configData = { ev: document.getElementById('ev').checked ? 'yes' : 'no', et: document.getElementById('et').checked ? 'yes' : 'no', ex: document.getElementById('ex').checked ? 'yes' : 'no', ech: document.getElementById('ech').checked ? 'yes' : 'no', tp: document.getElementById('tp').value,
-                            d: document.getElementById('customPath').value,
-                            p: document.getElementById('customIP').value,
-                            yx: document.getElementById('yx').value,
-                            yxURL: document.getElementById('yxURL').value,
-                            s: document.getElementById('socksConfig').value,
-                            homepage: document.getElementById('customHomepage').value,
-                            customDNS: document.getElementById('customDNS').value,
-                            customECHDomain: document.getElementById('customECHDomain').value
-                        };
+                async function saveAllConfig() {
+                    // 至少启用一个协议
+                    const evEl = document.getElementById('ev'), etEl = document.getElementById('et'), exEl = document.getElementById('ex');
+                    if (evEl && etEl && exEl && !evEl.checked && !etEl.checked && !exEl.checked) {
+                        flashActionStatus('${isFarsi ? 'حداقل یک پروتکل را فعال کنید!' : '至少需要启用一个协议！'}', 'err');
+                        cpToast('${isFarsi ? 'حداقل یک پروتکل را فعال کنید!' : '至少需要启用一个协议！'}', 'warn');
+                        return;
+                    }
+                    const btn = document.getElementById('cpBtnSaveAll');
+                    if (btn) { btn.classList.add('cp-action-btn-saving'); btn.disabled = true; }
+                    try {
+                        await saveConfig(collectAllConfig());
+                    } finally {
+                        if (btn) { btn.classList.remove('cp-action-btn-saving'); btn.disabled = false; }
+                    }
+                }
+                window.saveAllConfig = saveAllConfig;
 
-                        // 确保至少选择一个协议
-                        if (!document.getElementById('ev').checked && 
-                            !document.getElementById('et').checked && 
-                            !document.getElementById('ex').checked) {
-                            alert('至少需要启用一个协议！');
-                            return;
+                function flashActionStatus(msg, type) {
+                    const el = document.getElementById('cpActionStatus');
+                    if (!el) return;
+                    el.textContent = msg;
+                    el.classList.toggle('cp-err', type === 'err');
+                    el.classList.add('cp-show');
+                    clearTimeout(flashActionStatus._t);
+                    flashActionStatus._t = setTimeout(function() {
+                        el.classList.remove('cp-show');
+                    }, 2400);
+                }
+                window.flashActionStatus = flashActionStatus;
+
+                // 绑定底部统一操作条
+                const cpActionBar = document.getElementById('cpActionBar');
+                const cpBtnSaveAll = document.getElementById('cpBtnSaveAll');
+                if (cpBtnSaveAll) cpBtnSaveAll.addEventListener('click', async function() {
+                    cpBtnSaveAll.classList.add('cp-action-btn-saving');
+                    try {
+                        await saveAllConfig();
+                        if (cpActionBar) cpActionBar.classList.remove('cp-dirty');
+                    } finally {
+                        cpBtnSaveAll.classList.remove('cp-action-btn-saving');
+                    }
+                });
+                const cpBtnRefresh = document.getElementById('cpBtnRefresh');
+                if (cpBtnRefresh) cpBtnRefresh.addEventListener('click', async function() {
+                    cpBtnRefresh.classList.add('cp-action-btn-saving');
+                    try {
+                        await loadCurrentConfig();
+                        if (cpActionBar) cpActionBar.classList.remove('cp-dirty');
+                        flashActionStatus('${isFarsi ? 'تنظیمات تازه‌سازی شد' : '配置已刷新'}');
+                    } finally {
+                        cpBtnRefresh.classList.remove('cp-action-btn-saving');
+                    }
+                });
+                const cpBtnReset = document.getElementById('cpBtnReset');
+                if (cpBtnReset) cpBtnReset.addEventListener('click', resetAllConfig);
+
+                // 修改字段时把 FAB 标记为 "未保存"
+                function markDirty() {
+                    if (cpActionBar) cpActionBar.classList.add('cp-dirty');
+                }
+                const dirtyScope = document.getElementById('configContent') || document;
+                ['input', 'change'].forEach(function(evt) {
+                    dirtyScope.addEventListener(evt, function(e) {
+                        const tgt = e.target;
+                        if (!tgt || !tgt.tagName) return;
+                        const tag = tgt.tagName.toLowerCase();
+                        if (tag === 'input' || tag === 'select' || tag === 'textarea') {
+                            // 跳过延迟测试相关输入，避免误触
+                            if (tgt.id && /^(latencyTestInput|fetchURLInput|latencyTestPort|randomIPCount|testThreads|ipSourceSelect)$/.test(tgt.id)) return;
+                            markDirty();
                         }
-
-                        await saveConfig(configData);
                     });
-                }
+                });
 
-                const advancedConfigForm = document.getElementById('advancedConfigForm');
-                if (advancedConfigForm) {
-                    advancedConfigForm.addEventListener('submit', async function(e) {
+                // Ctrl+S / Cmd+S 触发保存
+                window.addEventListener('keydown', function(e) {
+                    if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
                         e.preventDefault();
-                        const configData = { scu: document.getElementById('scu').value, ena: document.getElementById('ena').checked ? 'yes' : 'no', epd: document.getElementById('epd').checked ? 'yes' : 'no', epi: document.getElementById('epi').checked ? 'yes' : 'no', egi: document.getElementById('egi').checked ? 'yes' : 'no', ae: document.getElementById('apiEnabled').value,
-                            rm: document.getElementById('regionMatching').value,
-                            qj: document.getElementById('downgradeControl').value,
-                            dkby: document.getElementById('portControl').value,
-                            yxby: document.getElementById('preferredControl').value,
-                            ipv4: document.getElementById('ipv4Enabled').checked ? 'yes' : 'no',
-                            ipv6: document.getElementById('ipv6Enabled').checked ? 'yes' : 'no',
-                            ispMobile: document.getElementById('ispMobile').checked ? 'yes' : 'no',
-                            ispUnicom: document.getElementById('ispUnicom').checked ? 'yes' : 'no',
-                            ispTelecom: document.getElementById('ispTelecom').checked ? 'yes' : 'no'
-                        };
-                        await saveConfig(configData);
-                    });
-                }
+                        if (cpBtnSaveAll && !cpBtnSaveAll.classList.contains('cp-action-btn-saving')) {
+                            cpBtnSaveAll.click();
+                        }
+                    }
+                });
 
                 let testAbortController = null;
                 let testResults = [];
@@ -4398,7 +6622,7 @@
                         const urlInput = document.getElementById('fetchURLInput');
                         const fetchUrl = urlInput.value.trim();
                         if (!fetchUrl) {
-                            alert('${isFarsi ? 'لطفا URL را وارد کنید' : '请输入URL'}');
+                            cpToast('${isFarsi ? 'لطفا URL را وارد کنید' : '请输入URL'}', 'warn');
                             return;
                         }
 
@@ -4530,7 +6754,7 @@
 
                             const coloName = result.colo ? getColoName(result.colo) : '';
                             const coloDisplay = coloName ? ' <span style="color: #00aaff;">[' + coloName + ']</span>' : '';
-                            info.innerHTML = '<span style="color: #00ff00;">' + result.host + ':' + result.port + '</span>' + coloDisplay + ' <span style="color: #ffff00;">' + result.latency + 'ms</span>';
+                            info.innerHTML = '<span style="color: #00f0ff;">' + result.host + ':' + result.port + '</span>' + coloDisplay + ' <span style="color: #ffff00;">' + result.latency + 'ms</span>';
 
                             resultItem.appendChild(checkbox);
                             resultItem.appendChild(info);
@@ -4799,7 +7023,7 @@
 
                     cities.forEach(city => {
                         const label = document.createElement('label');
-                        label.style.cssText = 'display: inline-flex; align-items: center; cursor: pointer; color: #00ff00; font-size: 0.85rem; padding: 4px 8px; background: rgba(0, 40, 0, 0.4); border: 1px solid #00aa00; border-radius: 4px;';
+                        label.style.cssText = 'display: inline-flex; align-items: center; cursor: pointer; color: #00f0ff; font-size: 0.85rem; padding: 4px 8px; background: rgba(20, 5, 50, 0.4); border: 1px solid #7aa9c4; border-radius: 4px;';
 
                         const checkbox = document.createElement('input');
                         checkbox.type = 'checkbox';
@@ -4982,23 +7206,24 @@
     }
 
     async function parseTrojanHeader(buffer, ut) {
+        const bytes = toUint8Array(buffer);
         const passwordToHash = tp || ut;
         const sha224Password = await sha224Hash(passwordToHash);
 
-        if (buffer.byteLength < 56) {
+        if (bytes.byteLength < 56) {
             return {
                 hasError: true,
                 message: "invalid " + atob('dHJvamFu') + " data - too short"
             };
         }
         let crLfIndex = 56;
-        if (new Uint8Array(buffer.slice(56, 57))[0] !== 0x0d || new Uint8Array(buffer.slice(57, 58))[0] !== 0x0a) {
+        if (bytes[56] !== 0x0d || bytes[57] !== 0x0a) {
             return {
                 hasError: true,
                 message: "invalid " + atob('dHJvamFu') + " header format (missing CR LF)"
             };
         }
-        const password = new TextDecoder().decode(buffer.slice(0, crLfIndex));
+        const password = sharedDecoder.decode(bytes.subarray(0, crLfIndex));
         if (password !== sha224Password) {
             return {
                 hasError: true,
@@ -5006,7 +7231,7 @@
             };
         }
 
-        const socks5DataBuffer = buffer.slice(crLfIndex + 2);
+        const socks5DataBuffer = bytes.subarray(crLfIndex + 2);
         if (socks5DataBuffer.byteLength < 6) {
             return {
                 hasError: true,
@@ -5014,7 +7239,7 @@
             };
         }
 
-        const view = new DataView(socks5DataBuffer);
+        const view = new DataView(socks5DataBuffer.buffer, socks5DataBuffer.byteOffset, socks5DataBuffer.byteLength);
         const cmd = view.getUint8(0);
         if (cmd !== 1) {
             return {
@@ -5030,22 +7255,16 @@
         switch (atype) {
             case 1:
                 addressLength = 4;
-                address = new Uint8Array(
-                socks5DataBuffer.slice(addressIndex, addressIndex + addressLength)
-                ).join(".");
+                address = socks5DataBuffer.subarray(addressIndex, addressIndex + addressLength).join(".");
                 break;
             case 3:
-                addressLength = new Uint8Array(
-                socks5DataBuffer.slice(addressIndex, addressIndex + 1)
-                )[0];
+                addressLength = socks5DataBuffer[addressIndex];
                 addressIndex += 1;
-                address = new TextDecoder().decode(
-                socks5DataBuffer.slice(addressIndex, addressIndex + addressLength)
-                );
+                address = sharedDecoder.decode(socks5DataBuffer.subarray(addressIndex, addressIndex + addressLength));
                 break;
             case 4:
                 addressLength = 16;
-                const dataView = new DataView(socks5DataBuffer.slice(addressIndex, addressIndex + addressLength));
+                const dataView = new DataView(socks5DataBuffer.buffer, socks5DataBuffer.byteOffset + addressIndex, addressLength);
                 const ipv6 = [];
                 for (let i = 0; i < 8; i++) {
                     ipv6.push(dataView.getUint16(i * 2).toString(16));
@@ -5067,8 +7286,7 @@
         }
 
         const portIndex = addressIndex + addressLength;
-        const portBuffer = socks5DataBuffer.slice(portIndex, portIndex + 2);
-        const portRemote = new DataView(portBuffer).getUint16(0);
+        const portRemote = new DataView(socks5DataBuffer.buffer, socks5DataBuffer.byteOffset + portIndex, 2).getUint16(0);
 
         return {
             hasError: false,
@@ -5076,7 +7294,7 @@
             addressType: atype,
             port: portRemote,
             hostname: address,
-            rawClientData: socks5DataBuffer.slice(portIndex + 4)
+            rawClientData: socks5DataBuffer.subarray(portIndex + 4)
         };
     }
 
@@ -5652,57 +7870,49 @@
         }
     }
 
-    function generateLinksFromNewIPs(list, user, workerDomain, echConfig = null, skipNumbering = false) {
+    function generateLinksFromNewIPs(list, user, workerDomain, echConfig = null, skipNumbering = false, aliasNamer = null) {
         const CF_HTTP_PORTS = [80, 8080, 8880, 2052, 2082, 2086, 2095];
         const CF_HTTPS_PORTS = [443, 2053, 2083, 2087, 2096, 8443];
         const links = [];
         const wsPath = '/?ed=2048';
         const proto = atob('dmxlc3M=');
 
-        const { namer, setSkipNumbering } = createNodeNamer(skipNumbering);
+        const makeNodeName = aliasNamer || createCompactNodeNamer(skipNumbering);
 
         for (const item of list) {
-            const nodeNameBase = item.name.replace(/\s/g, '_');
             const port = item.port;
             const safeIP = item.ip.includes(':') ? `[${item.ip}]` : item.ip;
 
-            const getNodeName = (suffix) => {
-                const nodeName = `${nodeNameBase}-${port}${suffix}`;
-                if (skipNumbering) return nodeName;
-                return namer(nodeNameBase, nodeName);
-            };
-
             if (CF_HTTPS_PORTS.includes(port)) {
-                const suffix = '-WS-TLS';
-                const wsNodeName = getNodeName(suffix);
+                const wsNodeName = makeNodeName(item);
                 let link = `${proto}://${user}@${safeIP}:${port}?encryption=none&security=tls&sni=${workerDomain}&fp=${enableECH ? 'chrome' : 'randomized'}&type=ws&host=${workerDomain}&path=${wsPath}`;
+                if (customALPN) link += `&alpn=${encodeURIComponent(customALPN)}`;
 
                 // 如果启用了ECH，添加ech参数（ECH需要伪装成Chrome浏览器）
                 if (enableECH) {
                     const dnsServer = customDNS || 'https://223.5.5.5/dns-query';
                     const echDomain = customECHDomain || 'cloudflare-ech.com';
-                    link += `&alpn=h3&ech=${encodeURIComponent(`${echDomain}+${dnsServer}`)}`;
+                    link += `&ech=${encodeURIComponent(`${echDomain}+${dnsServer}`)}`;
                 }
 
                 link += `#${encodeURIComponent(wsNodeName)}`;
                 links.push(link);
             } else if (CF_HTTP_PORTS.includes(port)) {
                 if (!disableNonTLS) {
-                    const suffix = '-WS';
-                    const wsNodeName = getNodeName(suffix);
+                    const wsNodeName = makeNodeName(item);
                     const link = `${proto}://${user}@${safeIP}:${port}?encryption=none&security=none&type=ws&host=${workerDomain}&path=${wsPath}#${encodeURIComponent(wsNodeName)}`;
                     links.push(link);
                 }
             } else {
-                const suffix = '-WS-TLS';
-                const wsNodeName = getNodeName(suffix);
+                const wsNodeName = makeNodeName(item);
                 let link = `${proto}://${user}@${safeIP}:${port}?encryption=none&security=tls&sni=${workerDomain}&fp=${enableECH ? 'chrome' : 'randomized'}&type=ws&host=${workerDomain}&path=${wsPath}`;
+                if (customALPN) link += `&alpn=${encodeURIComponent(customALPN)}`;
 
                 // 如果启用了ECH，添加ech参数（ECH需要伪装成Chrome浏览器）
                 if (enableECH) {
                     const dnsServer = customDNS || 'https://223.5.5.5/dns-query';
                     const echDomain = customECHDomain || 'cloudflare-ech.com';
-                    link += `&alpn=h3&ech=${encodeURIComponent(`${echDomain}+${dnsServer}`)}`;
+                    link += `&ech=${encodeURIComponent(`${echDomain}+${dnsServer}`)}`;
                 }
 
                 link += `#${encodeURIComponent(wsNodeName)}`;
@@ -5712,28 +7922,16 @@
         return links;
     }
 
-    function generateXhttpLinksFromSource(list, user, workerDomain, echConfig = null, skipNumbering = false) {
+    function generateXhttpLinksFromSource(list, user, workerDomain, echConfig = null, skipNumbering = false, aliasNamer = null) {
         const links = [];
         const nodePath = user.substring(0, 8);
 
-        const { namer, setSkipNumbering } = createNodeNamer(skipNumbering);
+        const makeNodeName = aliasNamer || createCompactNodeNamer(skipNumbering);
 
         for (const item of list) {
-            let nodeNameBase = item.isp || item.name || item.ip;
-            if (!nodeNameBase) continue;
-            nodeNameBase = nodeNameBase.replace(/\s/g, '_');
-            if (item.colo) nodeNameBase = `${nodeNameBase}-${item.colo}`;
             const safeIP = item.ip.includes(':') ? `[${item.ip}]` : item.ip;
             const port = item.port || 443;
-
-            const getNodeName = (suffix) => {
-                const nodeName = `${nodeNameBase}-${port}${suffix}`;
-                if (skipNumbering) return nodeName;
-                return namer(nodeNameBase, nodeName);
-            };
-
-            const suffix = '-xhttp';
-            const wsNodeName = getNodeName(suffix);
+            const wsNodeName = makeNodeName(item);
 
             const params = new URLSearchParams({
                 encryption: 'none',
@@ -5745,11 +7943,11 @@
                 path: `/${nodePath}`,
                 mode: 'stream-one'
             });
+            applyALPNParam(params);
 
             if (enableECH) {
                 const dnsServer = customDNS || 'https://223.5.5.5/dns-query';
                 const echDomain = customECHDomain || 'cloudflare-ech.com';
-                params.set('alpn', 'h3,h2');
                 params.set('ech', `${echDomain}+${dnsServer}`);
             }
 
@@ -5758,7 +7956,7 @@
         return links;
     }
 
-    async function generateTrojanLinksFromNewIPs(list, user, workerDomain, echConfig = null, skipNumbering = false) {
+    async function generateTrojanLinksFromNewIPs(list, user, workerDomain, echConfig = null, skipNumbering = false, aliasNamer = null) {
         const CF_HTTP_PORTS = [80, 8080, 8880, 2052, 2082, 2086, 2095];
         const CF_HTTPS_PORTS = [443, 2053, 2083, 2087, 2096, 8443];
 
@@ -5767,50 +7965,42 @@
 
         const password = tp || user;
 
-        const { namer, setSkipNumbering } = createNodeNamer(skipNumbering);
+        const makeNodeName = aliasNamer || createCompactNodeNamer(skipNumbering);
 
         for (const item of list) {
-            const nodeNameBase = item.name.replace(/\s/g, '_');
             const port = item.port;
             const safeIP = item.ip.includes(':') ? `[${item.ip}]` : item.ip;
 
-            const getNodeName = (suffix) => {
-                const nodeName = `${nodeNameBase}-${port}${suffix}`;
-                if (skipNumbering) return nodeName;
-                return namer(nodeNameBase, nodeName);
-            };
-
             if (CF_HTTPS_PORTS.includes(port)) {
-                const suffix = `-${atob('VHJvamFu')}-WS-TLS`;
-                const wsNodeName = getNodeName(suffix);
+                const wsNodeName = makeNodeName(item);
                 let link = `${atob('dHJvamFuOi8v')}${password}@${safeIP}:${port}?security=tls&sni=${workerDomain}&fp=chrome&type=ws&host=${workerDomain}&path=${wsPath}`;
+                if (customALPN) link += `&alpn=${encodeURIComponent(customALPN)}`;
 
                 // 如果启用了ECH，添加ech参数（ECH需要伪装成Chrome浏览器）
                 if (enableECH) {
                     const dnsServer = customDNS || 'https://223.5.5.5/dns-query';
                     const echDomain = customECHDomain || 'cloudflare-ech.com';
-                    link += `&alpn=h3&ech=${encodeURIComponent(`${echDomain}+${dnsServer}`)}`;
+                    link += `&ech=${encodeURIComponent(`${echDomain}+${dnsServer}`)}`;
                 }
 
                 link += `#${encodeURIComponent(wsNodeName)}`;
                 links.push(link);
             } else if (CF_HTTP_PORTS.includes(port)) {
                 if (!disableNonTLS) {
-                    const suffix = `-${atob('VHJvamFu')}-WS`;
-                    const wsNodeName = getNodeName(suffix);
+                    const wsNodeName = makeNodeName(item);
                     const link = `${atob('dHJvamFuOi8v')}${password}@${safeIP}:${port}?security=none&type=ws&host=${workerDomain}&path=${wsPath}#${encodeURIComponent(wsNodeName)}`;
                     links.push(link);
                 }
             } else {
-                const suffix = `-${atob('VHJvamFu')}-WS-TLS`;
-                const wsNodeName = getNodeName(suffix);
+                const wsNodeName = makeNodeName(item);
                 let link = `${atob('dHJvamFuOi8v')}${password}@${safeIP}:${port}?security=tls&sni=${workerDomain}&fp=chrome&type=ws&host=${workerDomain}&path=${wsPath}`;
+                if (customALPN) link += `&alpn=${encodeURIComponent(customALPN)}`;
 
                 // 如果启用了ECH，添加ech参数（ECH需要伪装成Chrome浏览器）
                 if (enableECH) {
                     const dnsServer = customDNS || 'https://223.5.5.5/dns-query';
                     const echDomain = customECHDomain || 'cloudflare-ech.com';
-                    link += `&alpn=h3&ech=${encodeURIComponent(`${echDomain}+${dnsServer}`)}`;
+                    link += `&ech=${encodeURIComponent(`${echDomain}+${dnsServer}`)}`;
                 }
                 link += `#${encodeURIComponent(wsNodeName)}`;
                 links.push(link);
@@ -6174,6 +8364,8 @@
         } else {
             customECHDomain = 'cloudflare-ech.com';
         }
+
+        customALPN = normalizeALPN(getConfigValue('alpn', ''));
 
         // 如果启用了ECH，自动启用仅TLS模式（避免80端口干扰）
         // ECH需要TLS才能工作，所以必须禁用非TLS节点
