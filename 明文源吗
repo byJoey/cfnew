@@ -335,6 +335,22 @@ const 传输连接竞速数 = 2;
 const 首字节超时 = 3500;
 const 共享解码器 = new TextDecoder();
 const 唯一标识字节缓存 = new Map();
+const 地区前缀缓存 = new Map();
+const 地区前缀查询缓存 = new Map();
+const 国家前缀映射 = {
+  SG: '新加坡',
+  HK: '香港',
+  JP: '日本',
+  US: '美国',
+  KR: '韩国',
+  DE: '德国',
+  GB: '英国',
+  NL: '荷兰',
+  FI: '芬兰',
+  SE: '瑞典',
+  TW: '台湾',
+  MO: '澳门'
+};
 function 是否有效格式(字符串) {
   const 用户正则 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   return 用户正则.test(字符串);
@@ -393,10 +409,96 @@ function 创建值节点命名器(跳过编号779 = false) {
   const 计数器组 = {};
   return 项目778 => {
     const 基础 = 获取值节点别名基础(项目778);
-    if (跳过编号779) return 基础;
-    计数器组[基础] = (计数器组[基础] || 0) + 1;
-    return `${基础}-${String(计数器组[基础]).padStart(2, '0')}`;
+    const 名称 = 跳过编号779 ? 基础 : `${基础}-${String((计数器组[基础] = (计数器组[基础] || 0) + 1)).padStart(2, '0')}`;
+    return 项目778?.geoPrefix ? `${项目778.geoPrefix}-${名称}` : 名称;
   };
+}
+function 国家码转旗帜(国家码778) {
+  const 代码777 = String(国家码778 || '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(代码777)) return '';
+  return [...代码777].map(字符776 => String.fromCodePoint(127397 + 字符776.charCodeAt(0))).join('');
+}
+function 格式化地区前缀(信息775 = {}) {
+  const 国家码774 = String(信息775.countryCode || 信息775.country_code || '').trim().toUpperCase();
+  const 国家名773 = 国家前缀映射[国家码774] || String(信息775.country || 信息775.country_name || '').trim();
+  if (!国家码774 && !国家名773) return '';
+  const 旗帜772 = 国家码转旗帜(国家码774);
+  return `${旗帜772}${国家名773 || 国家码774}`.trim();
+}
+async function 默认解析真实IP(主机771) {
+  for (const 类型770 of ['A', 'AAAA']) {
+    try {
+      const 响应769 = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(主机771)}&type=${类型770}`, {
+        headers: {
+          accept: 'application/dns-json'
+        }
+      });
+      if (!响应769.ok) continue;
+      const 数据768 = await 响应769.json();
+      const 记录767 = Array.isArray(数据768.Answer) ? 数据768.Answer.find(项766 => 项766?.data) : null;
+      if (记录767?.data) return 记录767.data;
+    } catch (错误765) {}
+  }
+  return '';
+}
+async function 查询真实IP归属地(真实IP764, 选项763 = {}) {
+  if (!真实IP764) return '';
+  if (地区前缀缓存.has(真实IP764)) return 地区前缀缓存.get(真实IP764);
+  if (地区前缀查询缓存.has(真实IP764)) return await 地区前缀查询缓存.get(真实IP764);
+  const 查询归属地762 = 选项763.查询归属地 || (async 地址761 => {
+    const 响应760 = await fetch(`https://ipwho.is/${encodeURIComponent(地址761)}`, {
+      headers: {
+        accept: 'application/json'
+      }
+    });
+    if (!响应760.ok) return null;
+    const 数据759 = await 响应760.json();
+    return 数据759?.success === false ? null : 数据759;
+  });
+  const 查询任务761 = (async () => {
+    try {
+      const 信息758 = await 查询归属地762(真实IP764);
+      const 前缀757 = 格式化地区前缀(信息758 || {});
+      地区前缀缓存.set(真实IP764, 前缀757);
+      return 前缀757;
+    } catch (错误756) {
+      地区前缀缓存.set(真实IP764, '');
+      return '';
+    } finally {
+      地区前缀查询缓存.delete(真实IP764);
+    }
+  })();
+  地区前缀查询缓存.set(真实IP764, 查询任务761);
+  return await 查询任务761;
+}
+async function 获取项目地区前缀(项目755, 选项754 = {}) {
+  const 主机753 = 规范化节点主机(项目755?.ip || 项目755?.domain || '');
+  if (!主机753) return {
+    resolvedIp: '',
+    geoPrefix: ''
+  };
+  const 真实IP752 = 是否有效地址(主机753) ? 主机753 : await (选项754.解析域名 || 默认解析真实IP)(主机753);
+  if (!真实IP752) {
+    return {
+      resolvedIp: '',
+      geoPrefix: ''
+    };
+  }
+  return {
+    resolvedIp: 真实IP752,
+    geoPrefix: await 查询真实IP归属地(真实IP752, 选项754)
+  };
+}
+async function 附加地区前缀到列表(列表751, 选项750 = {}) {
+  return await Promise.all((列表751 || []).map(async 项目749 => {
+    const 地区信息748 = await 获取项目地区前缀(项目749, 选项750);
+    if (!地区信息748.geoPrefix && !地区信息748.resolvedIp) return 项目749;
+    return {
+      ...项目749,
+      resolvedIp: 地区信息748.resolvedIp || 项目749.resolvedIp,
+      geoPrefix: 地区信息748.geoPrefix || 项目749.geoPrefix || ''
+    };
+  }));
 }
 function 规范化应用层协议协商(值777) {
   const 本地值776 = ['', 'h3', 'h2', 'http/1.1', 'h3,h2', 'h2,http/1.1', 'h3,h2,http/1.1'];
@@ -2646,14 +2748,15 @@ async function 处理订阅请求(请求507, 用户506, 网址505 = null) {
     加密客户端问候配置501 = `${加密客户端问候域名499}+${域名系统值500}`;
   }
   async function 添加节点列表来源列表(列表498) {
+    const 附加地区列表497 = await 附加地区前缀到列表(列表498);
     if (启用明文) {
-      最终链接列表.push(...生成链接列表来源源(列表498, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
+      最终链接列表.push(...生成链接列表来源源(附加地区列表497, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
     }
     if (启用木马) {
-      最终链接列表.push(...(await 生成木马链接列表来源源(列表498, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502)));
+      最终链接列表.push(...(await 生成木马链接列表来源源(附加地区列表497, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502)));
     }
     if (启用扩展传输) {
-      最终链接列表.push(...生成扩展超文本链接列表来源源(列表498, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
+      最终链接列表.push(...生成扩展超文本链接列表来源源(附加地区列表497, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
     }
   }
   if (启用原生地址) {
@@ -2737,7 +2840,7 @@ async function 处理订阅请求(请求507, 用户506, 网址505 = null) {
     }
     if (启用仓库优选) {
       try {
-        const 新地址列表 = await 获取值解析新地址列表();
+        const 新地址列表 = await 附加地区前缀到列表(await 获取值解析新地址列表());
         if (新地址列表.length > 0) {
           if (启用明文) {
             最终链接列表.push(...生成链接列表来源新地址列表(新地址列表, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
@@ -8782,3 +8885,5 @@ async function 获取优选接口(网址列表, 默认端口 = '443', 超时 = 3
   }));
   return Array.from(结果列表);
 }
+
+export { 创建值节点命名器, 附加地区前缀到列表 };
