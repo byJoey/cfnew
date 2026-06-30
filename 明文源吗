@@ -397,7 +397,15 @@ function 处理值节点别名部分(值785, 回退 = 'Node') {
   文本784 = 文本784.replace(/^\[([^\]]+)\]$/, '$1').replace(/^https?:\/\//i, '').replace(/[/?#].*$/, '').replace(/\s+/g, '_');
   return 文本784 || 回退;
 }
+function 是否已带地区前缀名称(名称783 = '') {
+  const 文本782 = String(名称783 || '').trim();
+  return /^(?:[\u{1F1E6}-\u{1F1FF}]{2}|🇭🇰|🇸🇬|🇯🇵|🇺🇸|🇩🇪|🇬🇧|🇰🇷|🇳🇱|🇫🇮|🇸🇪).+-.+/u.test(文本782);
+}
+function 是否测速结果名称(名称781 = '') {
+  return /^[^-#]+-\d+(?:\.\d+)?MB\/s$/i.test(String(名称781 || '').trim());
+}
 function 获取值节点别名基础(项目783) {
+  if (是否测速结果名称(项目783?.name || '')) return '优选节点';
   const 主机782 = 规范化节点主机(项目783?.ip || 项目783?.domain || '');
   if (主机782 && 主机782.includes(':') && /^[0-9a-fA-F:.]+$/.test(主机782)) return 'IPv6优选';
   if (主机782 && !是否有效地址(主机782)) return '优选域名';
@@ -408,6 +416,8 @@ function 获取值节点别名基础(项目783) {
 function 创建值节点命名器(跳过编号779 = false) {
   const 计数器组 = {};
   return 项目778 => {
+    const 原始名称777 = String(项目778?.name || '').trim();
+    if (是否已带地区前缀名称(原始名称777)) return 原始名称777;
     const 基础 = 获取值节点别名基础(项目778);
     const 名称 = 跳过编号779 ? 基础 : `${基础}-${String((计数器组[基础] = (计数器组[基础] || 0) + 1)).padStart(2, '0')}`;
     return 项目778?.geoPrefix ? `${项目778.geoPrefix}-${名称}` : 名称;
@@ -8543,6 +8553,10 @@ async function 处理优选地址列表接口(请求) {
           ip: 项目44.ip,
           port: 端口43,
           name: 名称,
+          regionCode: 项目44.regionCode || '',
+          country: 项目44.country || '',
+          city: 项目44.city || '',
+          sourceType: 项目44.sourceType || '',
           addedAt: new Date().toISOString()
         };
         本地值47.push(新地址);

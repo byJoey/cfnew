@@ -65,3 +65,39 @@ test('同一个真实 IP 在一次生成流程中只查询一次', async () => {
   });
   assert.equal(查询次数, 1);
 });
+
+test('已带地区前缀的上游名称保持原样', async () => {
+  const { 创建值节点命名器 } = await 加载明文模块();
+  const 制作节点名称 = 创建值节点命名器(false);
+  assert.equal(
+    制作节点名称({ name: '🇸🇬新加坡-优选节点-11', geoPrefix: '', ip: '1.1.1.1' }),
+    '🇸🇬新加坡-优选节点-11'
+  );
+});
+
+test('带显式地区语义的 ProxyIP 名称保持原样', async () => {
+  const { 创建值节点命名器 } = await 加载明文模块();
+  const 制作节点名称 = 创建值节点命名器(false);
+  assert.equal(
+    制作节点名称({ name: '🇭🇰香港-ProxyIP-HK-01', regionCode: 'HK', ip: 'proxy.example.com' }),
+    '🇭🇰香港-ProxyIP-HK-01'
+  );
+});
+
+test('yx-tools 旧格式测速名称会归一化为优选节点命名', async () => {
+  const { 创建值节点命名器 } = await 加载明文模块();
+  const 制作节点名称 = 创建值节点命名器(false);
+  assert.equal(
+    制作节点名称({ name: '新加坡-12.34MB/s', ip: '1.1.1.1', geoPrefix: '🇸🇬新加坡' }),
+    '🇸🇬新加坡-优选节点-01'
+  );
+});
+
+test('ProxyIP 名称缺少显式地区时仍按现有 fallback 逻辑命名', async () => {
+  const { 创建值节点命名器 } = await 加载明文模块();
+  const 制作节点名称 = 创建值节点命名器(false);
+  assert.equal(
+    制作节点名称({ isp: 'ProxyIP-SG', ip: '1.1.1.1', geoPrefix: '' }),
+    'ProxyIP-SG-01'
+  );
+});
