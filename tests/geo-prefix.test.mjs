@@ -17,7 +17,7 @@ const __testHooks__ = {
   写入键值配置(值) { 键值配置 = 值; },
   读取自定义优选地址列表() { return 自定义优选地址列表; }
 };
-export { 解析值值数组, 处理数组值值, 获取项目地区前缀, 更新自定义优选来源值, __testHooks__ };
+export { __worker_default__, 解析值值数组, 处理数组值值, 获取项目地区前缀, 更新自定义优选来源值, __testHooks__ };
 `);
 
   await writeFile(临时文件, 可测试源码, 'utf8');
@@ -146,4 +146,34 @@ test('已有地区元数据时直接生成 geoPrefix 而不依赖在线归属地
 
   assert.equal(地区信息.resolvedIp, '1.1.1.1');
   assert.equal(地区信息.geoPrefix, '🇸🇬新加坡');
+});
+
+test('订阅请求会使用 JSON yx 配置里的 canonical 名称', async () => {
+  const { __worker_default__, 处理数组值值 } = await 加载明文模块();
+  const yx配置值 = 处理数组值值([{
+    ip: '1.1.1.1',
+    port: 443,
+    name: '🇸🇬新加坡-优选节点-11',
+    regionCode: 'SG',
+    country: '新加坡',
+    city: '新加坡',
+    sourceType: 'preferred'
+  }]);
+
+  const 响应 = await __worker_default__.fetch(
+    new Request('https://example.com/34cf1383-b901-41dd-8745-42c63e43f148/sub?target=clash'),
+    {
+      u: '34cf1383-b901-41dd-8745-42c63e43f148',
+      yx: yx配置值,
+      ena: 'no',
+      epd: 'no',
+      epi: 'yes',
+      egi: 'no'
+    },
+    {}
+  );
+
+  const 文本 = await 响应.text();
+  assert.match(文本, /🇸🇬新加坡-优选节点-11/);
+  assert.doesNotMatch(文本, /所有节点获取失败/);
 });

@@ -783,35 +783,33 @@ export default {
       const 自定义优选 = 获取配置值('yx', 本地值734.yx || 本地值734.YX);
       if (自定义优选) {
         try {
-          const 优选列表721 = 自定义优选.split(',').map(项目720 => 项目720.trim()).filter(项目719 => 项目719);
+          const 优选列表721 = 解析值值数组(自定义优选);
           自定义优选地址列表 = [];
           自定义优选域名列表 = [];
           优选列表721.forEach(项目718 => {
-            let 节点名称717 = '';
-            let 地址部分716 = 项目718;
-            if (项目718.includes('#')) {
-              const 部分列表715 = 项目718.split('#');
-              地址部分716 = 部分列表715[0].trim();
-              节点名称717 = 部分列表715[1].trim();
-            }
-            const {
-              address: 地址714,
-              port: 端口713
-            } = 解析地址值端口(地址部分716);
-            if (!节点名称717) {
-              节点名称717 = '自定义优选-' + 地址714 + (端口713 ? ':' + 端口713 : '');
-            }
+            const 地址714 = 项目718.ip;
+            const 端口713 = 项目718.port || 443;
+            const 节点名称717 = 项目718.name || '自定义优选-' + 地址714 + (端口713 ? ':' + 端口713 : '');
             if (是否有效地址(地址714)) {
               自定义优选地址列表.push({
                 ip: 地址714,
                 port: 端口713,
-                isp: 节点名称717
+                isp: 节点名称717,
+                name: 节点名称717,
+                regionCode: 项目718.regionCode || '',
+                country: 项目718.country || '',
+                city: 项目718.city || '',
+                sourceType: 项目718.sourceType || ''
               });
             } else {
               自定义优选域名列表.push({
                 domain: 地址714,
                 port: 端口713,
-                name: 节点名称717
+                name: 节点名称717,
+                regionCode: 项目718.regionCode || '',
+                country: 项目718.country || '',
+                city: 项目718.city || '',
+                sourceType: 项目718.sourceType || ''
               });
             }
           });
