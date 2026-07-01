@@ -487,6 +487,16 @@ async function 获取项目地区前缀(项目755, 选项754 = {}) {
     resolvedIp: '',
     geoPrefix: ''
   };
+  const 元数据前缀752 = 格式化地区前缀({
+    countryCode: 项目755?.countryCode || 项目755?.country_code || 项目755?.regionCode || '',
+    country: 项目755?.country || 项目755?.country_name || 项目755?.city || ''
+  });
+  if (元数据前缀752) {
+    return {
+      resolvedIp: 是否有效地址(主机753) ? 主机753 : '',
+      geoPrefix: 元数据前缀752
+    };
+  }
   const 真实IP752 = 是否有效地址(主机753) ? 主机753 : await (选项754.解析域名 || 默认解析真实IP)(主机753);
   if (!真实IP752) {
     return {
@@ -8722,35 +8732,33 @@ function 更新自定义优选来源值() {
   const 值值30 = 获取配置值('yx', '');
   if (值值30) {
     try {
-      const 优选列表 = 值值30.split(',').map(项目29 => 项目29.trim()).filter(项目28 => 项目28);
+      const 优选列表 = 解析值值数组(值值30);
       自定义优选地址列表 = [];
       自定义优选域名列表 = [];
       优选列表.forEach(项目27 => {
-        let 节点名称26 = '';
-        let 地址部分25 = 项目27;
-        if (项目27.includes('#')) {
-          const 部分列表24 = 项目27.split('#');
-          地址部分25 = 部分列表24[0].trim();
-          节点名称26 = 部分列表24[1].trim();
-        }
-        const {
-          address: 地址23,
-          port: 端口22
-        } = 解析地址值端口(地址部分25);
-        if (!节点名称26) {
-          节点名称26 = '自定义优选-' + 地址23 + (端口22 ? ':' + 端口22 : '');
-        }
+        const 地址23 = 项目27.ip;
+        const 端口22 = 项目27.port || 443;
+        const 节点名称26 = 项目27.name || '自定义优选-' + 地址23 + (端口22 ? ':' + 端口22 : '');
         if (是否有效地址(地址23)) {
           自定义优选地址列表.push({
             ip: 地址23,
             port: 端口22,
-            isp: 节点名称26
+            isp: 节点名称26,
+            name: 节点名称26,
+            regionCode: 项目27.regionCode || '',
+            country: 项目27.country || '',
+            city: 项目27.city || '',
+            sourceType: 项目27.sourceType || ''
           });
         } else {
           自定义优选域名列表.push({
             domain: 地址23,
             port: 端口22,
-            name: 节点名称26
+            name: 节点名称26,
+            regionCode: 项目27.regionCode || '',
+            country: 项目27.country || '',
+            city: 项目27.city || '',
+            sourceType: 项目27.sourceType || ''
           });
         }
       });
@@ -8765,6 +8773,23 @@ function 更新自定义优选来源值() {
 }
 function 解析值值数组(值值) {
   if (!值值 || !值值.trim()) return [];
+  const 去空格值 = 值值.trim();
+  if (去空格值.startsWith('[')) {
+    try {
+      const 数据 = JSON.parse(去空格值);
+      if (!Array.isArray(数据)) return [];
+      return 数据.map(项目 => ({
+        ip: 项目.ip,
+        port: 项目.port || 443,
+        name: 项目.name || `${项目.ip}${项目.port ? ':' + 项目.port : ''}`,
+        regionCode: 项目.regionCode || '',
+        country: 项目.country || '',
+        city: 项目.city || '',
+        sourceType: 项目.sourceType || '',
+        addedAt: 项目.addedAt || new Date().toISOString()
+      })).filter(项目 => 项目.ip);
+    } catch (错误) {}
+  }
   const 项目列表 = 值值.split(',').map(项目21 => 项目21.trim()).filter(项目20 => 项目20);
   const 结果 = [];
   for (const 项目19 of 项目列表) {
@@ -8786,6 +8811,10 @@ function 解析值值数组(值值) {
       ip: 地址,
       port: 端口18 || 443,
       name: 节点名称,
+      regionCode: '',
+      country: '',
+      city: '',
+      sourceType: '',
       addedAt: new Date().toISOString()
     });
   }
@@ -8793,10 +8822,16 @@ function 解析值值数组(值值) {
 }
 function 处理数组值值(数组) {
   if (!数组 || 数组.length === 0) return '';
-  return 数组.map(项目 => {
-    const 端口17 = 项目.port || 443;
-    return `${项目.ip}:${端口17}#${项目.name}`;
-  }).join(',');
+  return JSON.stringify(数组.map(项目 => ({
+    ip: 项目.ip,
+    port: 项目.port || 443,
+    name: 项目.name || `${项目.ip}:${项目.port || 443}`,
+    regionCode: 项目.regionCode || '',
+    country: 项目.country || '',
+    city: 项目.city || '',
+    sourceType: 项目.sourceType || '',
+    addedAt: 项目.addedAt || new Date().toISOString()
+  })));
 }
 function 是否有效域名(域名) {
   const 域名正则 = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;

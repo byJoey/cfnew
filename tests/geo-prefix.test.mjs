@@ -11,7 +11,14 @@ async function 加载明文模块() {
   const 临时文件 = join(临时目录, '明文源吗.testable.mjs');
   const 可测试源码 = 原始源码
     .replace("import { connect as 连接 } from 'cloudflare:sockets';", 'const 连接 = globalThis.__CF_CONNECT_STUB__;')
-    .replace('export default {', 'const __worker_default__ = {');
+    .replace('export default {', 'const __worker_default__ = {')
+    .concat(`
+const __testHooks__ = {
+  写入键值配置(值) { 键值配置 = 值; },
+  读取自定义优选地址列表() { return 自定义优选地址列表; }
+};
+export { 解析值值数组, 处理数组值值, 获取项目地区前缀, 更新自定义优选来源值, __testHooks__ };
+`);
 
   await writeFile(临时文件, 可测试源码, 'utf8');
   try {
@@ -100,4 +107,43 @@ test('ProxyIP 名称缺少显式地区时仍按现有 fallback 逻辑命名', as
     制作节点名称({ isp: 'ProxyIP-SG', ip: '1.1.1.1', geoPrefix: '' }),
     'ProxyIP-SG-01'
   );
+});
+
+test('yx 配置 round-trip 后仍保留上游 canonical 名称', async () => {
+  const { 处理数组值值, 更新自定义优选来源值, 创建值节点命名器, __testHooks__ } = await 加载明文模块();
+  const yx配置值 = 处理数组值值([{
+    ip: '1.1.1.1',
+    port: 443,
+    name: '🇸🇬新加坡-优选节点-11',
+    regionCode: 'SG',
+    country: '新加坡',
+    city: '新加坡',
+    sourceType: 'preferred'
+  }]);
+
+  __testHooks__.写入键值配置({ yx: yx配置值 });
+  更新自定义优选来源值();
+
+  const 恢复列表 = __testHooks__.读取自定义优选地址列表();
+  assert.equal(恢复列表[0]?.name, '🇸🇬新加坡-优选节点-11');
+
+  const 制作节点名称 = 创建值节点命名器(false);
+  assert.equal(制作节点名称(恢复列表[0]), '🇸🇬新加坡-优选节点-11');
+});
+
+test('已有地区元数据时直接生成 geoPrefix 而不依赖在线归属地查询', async () => {
+  const { 获取项目地区前缀 } = await 加载明文模块();
+  const 地区信息 = await 获取项目地区前缀({
+    ip: '1.1.1.1',
+    regionCode: 'SG',
+    country: '新加坡',
+    city: '新加坡'
+  }, {
+    查询归属地: async () => {
+      throw new Error('不应触发在线归属地查询');
+    }
+  });
+
+  assert.equal(地区信息.resolvedIp, '1.1.1.1');
+  assert.equal(地区信息.geoPrefix, '🇸🇬新加坡');
 });
