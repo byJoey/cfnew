@@ -177,3 +177,15 @@ test('订阅请求会使用 JSON yx 配置里的 canonical 名称', async () => 
   assert.match(文本, /🇸🇬新加坡-优选节点-11/);
   assert.doesNotMatch(文本, /所有节点获取失败/);
 });
+
+test('已带地区前缀的重名节点会自动去重', async () => {
+  const { 创建值节点命名器 } = await 加载明文模块();
+  const 制作节点名称 = 创建值节点命名器(false);
+
+  const 第一条 = 制作节点名称({ name: '🇸🇬新加坡-优选节点-11', ip: '1.1.1.1' });
+  const 第二条 = 制作节点名称({ name: '🇸🇬新加坡-优选节点-11', ip: '1.1.1.2' });
+
+  assert.equal(第一条, '🇸🇬新加坡-优选节点-11');
+  assert.notEqual(第二条, 第一条);
+  assert.equal(第二条, '🇸🇬新加坡-优选节点-11-02');
+});
