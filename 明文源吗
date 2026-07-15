@@ -1918,6 +1918,10 @@ function 规范化值主机(主机名619) {
   return 头值618;
 }
 
+const 自动选路测速地址 = 'https://www.gstatic.com/generate_204';
+const 自动选路测速间隔 = 300;
+const 自动选路容差 = 50;
+
 // Clash 策略组 proxies：策略组 + 全部节点（避免分组里只有「节点选择」没有具体节点）
 function 处理值选择值(名称列表617, 本地值616 = {}) {
   const {
@@ -1950,6 +1954,24 @@ function 处理值值列表(名称列表610, 本地值609 = {}) {
   部分列表604.push(...值值608);
   if (名称列表610.length) 部分列表604.push(列表605);
   return 部分列表604.join(本地值606);
+}
+
+function 构建值自动选路组(名称列表603) {
+  if (!名称列表603.length) {
+    return ['  - name: "🚀 节点选择"', '    type: select', '    proxies:', '      - "🎯 全球直连"'].join('\n');
+  }
+  return ['  - name: "🚀 节点选择"', '    type: url-test', `    url: ${处理本地值622(自动选路测速地址)}`, `    interval: ${自动选路测速间隔}`, `    tolerance: ${自动选路容差}`, '    lazy: true', '    proxies:', 名称列表603.map(名称602 => `      - ${处理本地值622(名称602)}`).join('\n')].join('\n');
+}
+
+function 构建值自动选路策略组(名称列表601, 本地值600 = {}) {
+  const {
+    compact: 本地值599 = false
+  } = 本地值600;
+  if (!名称列表601.length) return 本地值599 ? '🚀 节点选择 = select,🎯 全球直连' : '🚀 节点选择 = select, 🎯 全球直连';
+  const 本地值598 = 本地值599 ? ',' : ', ';
+  const 列表597 = 名称列表601.join(本地值598);
+  if (本地值599) return `🚀 节点选择 = url-test,${列表597},url=${自动选路测速地址},interval=${自动选路测速间隔},tolerance=${自动选路容差}`;
+  return `🚀 节点选择 = url-test, ${列表597}, url=${自动选路测速地址}, interval=${自动选路测速间隔}, tolerance=${自动选路容差}`;
 }
 
 // 解析任意分享链接为通用节点对象
@@ -2056,8 +2078,7 @@ function 生成值值589(链接列表588, 本地值587 = {}) {
   const 头部581 = ['mixed-port: 7890', 'allow-lan: true', 'mode: rule', 'log-level: info', 'ipv6: true', 'external-controller: 127.0.0.1:9090', 'unified-delay: true', 'tcp-concurrent: true', 'geodata-mode: true', 'geo-auto-update: true', 'geo-update-interval: 24', 'geox-url:', '  geoip: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat"', '  geosite: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat"', '  mmdb: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb"', '  asn: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/GeoLite2-ASN.mmdb"', 'sniffer:', '  enable: true', '  force-dns-mapping: true', '  parse-pure-ip: true', '  sniff:', '    HTTP:', '      ports: [80, 8080-8880]', '      override-destination: true', '    TLS:', '      ports: [443, 8443]', '    QUIC:', '      ports: [443, 8443]', 'dns:', '  enable: true', '  listen: 0.0.0.0:1053', '  ipv6: true', '  enhanced-mode: fake-ip', '  fake-ip-range: 198.18.0.1/16', '  fake-ip-filter:', '    - "*.lan"', '    - "+.local"', '    - "+.market.xiaomi.com"', '    - "+.msftconnecttest.com"', '    - "+.msftncsi.com"', '    - "localhost.ptlogin2.qq.com"', '    - "+.srv.nintendo.net"', '    - "+.stun.playstation.net"', '    - "+.xboxlive.com"', '  default-nameserver:', '    - 223.5.5.5', '    - 119.29.29.29', '  nameserver:', `    - ${域名系统值582}`, '    - https://119.29.29.29/dns-query', '  fallback:', '    - https://1.1.1.1/dns-query', '    - https://8.8.8.8/dns-query', '  fallback-filter:', '    geoip: true', '    geoip-code: CN', '    ipcidr:', '      - 240.0.0.0/4', ''];
   const 值值580 = ['proxies:'];
   for (const 数量值579 of 节点列表586) 值值580.push(构建值节点行(数量值579));
-  const 节点仅 = 名称列表584.length ? 名称列表584.map(数量值578 => `      - ${处理本地值622(数量值578)}`).join('\n') : '      - DIRECT';
-  const 值值577 = [解码64('cHJveHktZ3JvdXBzOg=='), '  - name: "🚀 节点选择"', '    type: select', '    proxies:', '      - "🎯 全球直连"', 节点仅, '  - name: "🌍 国外媒体"', '    type: select', '    proxies:', 处理值选择值(名称列表584), '  - name: "📺 哔哩哔哩"', '    type: select', '    proxies:', 处理值选择值(名称列表584, {
+  const 值值577 = [解码64('cHJveHktZ3JvdXBzOg=='), 构建值自动选路组(名称列表584), '  - name: "🌍 国外媒体"', '    type: select', '    proxies:', 处理值选择值(名称列表584), '  - name: "📺 哔哩哔哩"', '    type: select', '    proxies:', 处理值选择值(名称列表584, {
     directFirst: true
   }), '  - name: "📹 油管视频"', '    type: select', '    proxies:', 处理值选择值(名称列表584, {
     extraGroups: ['🌍 国外媒体']
@@ -2383,8 +2404,7 @@ function 生成值值562(链接列表561) {
   }
   行列表555.push('');
   行列表555.push(解码64('W1Byb3h5IEdyb3VwXQ=='));
-  const 列表553 = 名称列表557.length ? 名称列表557.join(', ') : 'DIRECT';
-  行列表555.push(`🚀 节点选择 = select, 🎯 全球直连, ${列表553}`);
+  行列表555.push(构建值自动选路策略组(名称列表557));
   行列表555.push(`🌍 国外媒体 = select, ${处理值值列表(名称列表557)}`);
   行列表555.push(`📺 哔哩哔哩 = select, ${处理值值列表(名称列表557, {
     directFirst: true
@@ -2461,8 +2481,9 @@ function 生成值值552(链接列表551) {
   }
   行列表546.push('');
   行列表546.push(解码64('W1Byb3h5IEdyb3VwXQ=='));
-  const 列表542 = 名称列表548.length ? 名称列表548.join(',') : 'DIRECT';
-  行列表546.push(`🚀 节点选择 = select,🎯 全球直连,${列表542}`);
+  行列表546.push(构建值自动选路策略组(名称列表548, {
+    compact: true
+  }));
   行列表546.push(`🌍 国外媒体 = select,${处理值值列表(名称列表548, {
     compact: true
   })}`);

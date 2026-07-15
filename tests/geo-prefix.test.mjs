@@ -17,7 +17,7 @@ const __testHooks__ = {
   写入键值配置(值) { 键值配置 = 值; },
   读取自定义优选地址列表() { return 自定义优选地址列表; }
 };
-export { __worker_default__, 解析值值数组, 处理数组值值, 获取项目地区前缀, 更新自定义优选来源值, __testHooks__ };
+export { __worker_default__, 解析值值数组, 处理数组值值, 获取项目地区前缀, 更新自定义优选来源值, 生成值值589, 生成值值562, 生成值值552, __testHooks__ };
 `);
 
   await writeFile(临时文件, 可测试源码, 'utf8');
@@ -26,6 +26,29 @@ export { __worker_default__, 解析值值数组, 处理数组值值, 获取项�
   } finally {
     await rm(临时目录, { recursive: true, force: true });
   }
+}
+
+function 构建测试链接(名称, 服务器) {
+  const 参数 = new URLSearchParams({
+    encryption: 'none',
+    security: 'tls',
+    sni: 'example.com',
+    type: 'ws',
+    host: 'example.com',
+    path: '/?ed=2048'
+  });
+  return `vless://34cf1383-b901-41dd-8745-42c63e43f148@${服务器}:443?${参数.toString()}#${encodeURIComponent(名称)}`;
+}
+
+function 构建测试木马链接(名称, 服务器) {
+  const 参数 = new URLSearchParams({
+    security: 'tls',
+    sni: 'example.com',
+    type: 'ws',
+    host: 'example.com',
+    path: '/?ed=2048'
+  });
+  return `trojan://test-password@${服务器}:443?${参数.toString()}#${encodeURIComponent(名称)}`;
 }
 
 test('域名优选节点使用真实 IP 归属地前缀', async () => {
@@ -176,6 +199,38 @@ test('订阅请求会使用 JSON yx 配置里的 canonical 名称', async () => 
   const 文本 = await 响应.text();
   assert.match(文本, /🇸🇬新加坡-优选节点-11/);
   assert.doesNotMatch(文本, /所有节点获取失败/);
+});
+
+test('Clash 订阅会把节点选择生成为 url-test 自动选路组', async () => {
+  const { 生成值值589 } = await 加载明文模块();
+  const 文本 = 生成值值589([
+    构建测试链接('🇸🇬新加坡-优选节点-11', '1.1.1.1'),
+    构建测试链接('🇯🇵东京羽田-HND-01', '1.0.0.1')
+  ]);
+  assert.match(文本, /- name: "🚀 节点选择"\n\s+type: url-test/);
+  assert.match(文本, /url: "https:\/\/www\.gstatic\.com\/generate_204"/);
+  const 自动组 = 文本.match(/- name: "🚀 节点选择"[\s\S]*?(?=\n  - name: "|$)/)?.[0] || '';
+  assert.doesNotMatch(自动组, /🎯 全球直连/);
+});
+
+test('Surge 订阅会把节点选择生成为 url-test 自动选路组', async () => {
+  const { 生成值值562 } = await 加载明文模块();
+  const 文本 = 生成值值562([
+    构建测试木马链接('🇸🇬新加坡-优选节点-11', '1.1.1.1'),
+    构建测试木马链接('🇯🇵东京羽田-HND-01', '1.0.0.1')
+  ]);
+  assert.match(文本, /🚀 节点选择 = url-test, .*url=https:\/\/www\.gstatic\.com\/generate_204, interval=300, tolerance=50/);
+  assert.doesNotMatch(文本, /🚀 节点选择 = select, 🎯 全球直连/);
+});
+
+test('Loon 订阅会把节点选择生成为 url-test 自动选路组', async () => {
+  const { 生成值值552 } = await 加载明文模块();
+  const 文本 = 生成值值552([
+    构建测试链接('🇸🇬新加坡-优选节点-11', '1.1.1.1'),
+    构建测试链接('🇯🇵东京羽田-HND-01', '1.0.0.1')
+  ]);
+  assert.match(文本, /🚀 节点选择 = url-test,🇸🇬新加坡-优选节点-11,🇯🇵东京羽田-HND-01,url=https:\/\/www\.gstatic\.com\/generate_204,interval=300,tolerance=50/);
+  assert.doesNotMatch(文本, /🚀 节点选择 = select,🎯 全球直连/);
 });
 
 test('已带地区前缀的重名节点会自动去重', async () => {
