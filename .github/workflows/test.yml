@@ -47,18 +47,7 @@ jobs:
           tag_name: ${{ steps.get_tag.outputs.tag_name }}
           name: Pages ${{ steps.get_tag.outputs.tag_name }}
           body: |
-            ## 部署信息
-            
-            - **源文件**: 少年你相信光吗
-            - **目标文件**: _worker.js
-            - **兼容性文件**: wrangler.toml (compatibility_date: 2026-01-20)
-            - **压缩文件**: Pages.zip
-            - **标签**: ${{ steps.get_tag.outputs.tag_name }}
-            - **部署时间**: ${{ github.event.head_commit.timestamp }}
-            
-            ## 文件变更
-            
-            已从 `少年你相信光吗` 生成 `_worker.js` 文件，连同 `wrangler.toml` 兼容性配置一起压缩为 `Pages.zip`。
+            代码重构支持明文部署
           draft: false
           prerelease: false
           files: Pages.zip
