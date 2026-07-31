@@ -446,7 +446,10 @@ async function 默认解析真实IP(主机771) {
           accept: 'application/dns-json'
         }
       });
-      if (!响应769.ok) continue;
+      if (!响应769.ok) {
+        await 响应769.body?.cancel();
+        continue;
+      }
       const 数据768 = await 响应769.json();
       const 记录767 = Array.isArray(数据768.Answer) ? 数据768.Answer.find(项766 => 项766?.data) : null;
       if (记录767?.data) return 记录767.data;
@@ -464,7 +467,10 @@ async function 查询真实IP归属地(真实IP764, 选项763 = {}) {
         accept: 'application/json'
       }
     });
-    if (!响应760.ok) return null;
+    if (!响应760.ok) {
+      await 响应760.body?.cancel();
+      return null;
+    }
     const 数据759 = await 响应760.json();
     return 数据759?.success === false ? null : 数据759;
   });
@@ -2880,33 +2886,33 @@ async function 处理订阅请求(请求507, 用户506, 网址505 = null) {
         }
       }
     }
-    if (启用仓库优选) {
-      try {
-        const 新地址列表 = await 附加地区前缀到列表(await 获取值解析新地址列表());
-        if (新地址列表.length > 0) {
-          if (启用明文) {
-            最终链接列表.push(...生成链接列表来源新地址列表(新地址列表, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
-          }
-          if (启用木马) {
-            最终链接列表.push(...(await 生成木马链接列表来源新地址列表(新地址列表, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502)));
-          }
-          if (启用扩展传输) {
-            最终链接列表.push(...生成扩展超文本链接列表来源源(新地址列表, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
-          }
+  }
+  if (启用仓库优选 && !禁用优选) {
+    try {
+      const 新地址列表 = await 附加地区前缀到列表(await 获取值解析新地址列表());
+      if (新地址列表.length > 0) {
+        if (启用明文) {
+          最终链接列表.push(...生成链接列表来源新地址列表(新地址列表, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
         }
-      } catch (错误486) {
-        if (!当前工作器地区) {
-          当前工作器地区 = await 检测工作器地区(请求507);
+        if (启用木马) {
+          最终链接列表.push(...(await 生成木马链接列表来源新地址列表(新地址列表, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502)));
         }
-        const 值备用地址485 = await 获取值备用地址(当前工作器地区);
-        if (值备用地址485) {
-          回退地址 = 值备用地址485.domain + ':' + 值备用地址485.port;
-          const 备用列表 = [{
-            ip: 值备用地址485.domain,
-            isp: 解码64('UHJveHlJUC0=') + 当前工作器地区
-          }];
-          await 添加节点列表来源列表(备用列表);
+        if (启用扩展传输) {
+          最终链接列表.push(...生成扩展超文本链接列表来源源(新地址列表, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
         }
+      }
+    } catch (错误486) {
+      if (!当前工作器地区) {
+        当前工作器地区 = await 检测工作器地区(请求507);
+      }
+      const 值备用地址485 = await 获取值备用地址(当前工作器地区);
+      if (值备用地址485) {
+        回退地址 = 值备用地址485.domain + ':' + 值备用地址485.port;
+        const 备用列表 = [{
+          ip: 值备用地址485.domain,
+          isp: 解码64('UHJveHlJUC0=') + 当前工作器地区
+        }];
+        await 添加节点列表来源列表(备用列表);
       }
     }
   }
@@ -8267,10 +8273,79 @@ async function 获取值解析新地址列表() {
       for (const 项目109 of 接口结果列表) {
         const 本地值108 = 项目109.match(正则);
         if (本地值108) {
+          const 节点名称 = 本地值108[3]?.trim() || 本地值108[1];
+          let regionCode = '';
+          let country = '';
+          const 节点名称大写 = 节点名称.toUpperCase();
+          if (节点名称大写.includes('HKG') || 节点名称大写.includes('香港') || 节点名称大写.includes('HK')) {
+            regionCode = 'HK';
+            country = '香港';
+          } else if (节点名称大写.includes('SIN') || 节点名称大写.includes('新加坡') || 节点名称大写.includes('SG')) {
+            regionCode = 'SG';
+            country = '新加坡';
+          } else if (节点名称大写.includes('JP') || 节点名称大写.includes('东京') || 节点名称大写.includes('NRT') || 节点名称大写.includes('日本')) {
+            regionCode = 'JP';
+            country = '日本';
+          } else if (节点名称大写.includes('US') || 节点名称大写.includes('美国') || 节点名称大写.includes('LAX') || 节点名称大写.includes('DEN') || 节点名称大写.includes('IAD') || 节点名称大写.includes('IAH') || 节点名称大写.includes('SJC')) {
+            regionCode = 'US';
+            country = '美国';
+          } else if (节点名称大写.includes('KR') || 节点名称大写.includes('韩国')) {
+            regionCode = 'KR';
+            country = '韩国';
+          } else if (节点名称大写.includes('TW') || 节点名称大写.includes('台湾')) {
+            regionCode = 'TW';
+            country = '台湾';
+          } else if (节点名称大写.includes('MO') || 节点名称大写.includes('澳门')) {
+            regionCode = 'MO';
+            country = '澳门';
+          } else if (节点名称大写.includes('DE') || 节点名称大写.includes('德国') || 节点名称大写.includes('FRA')) {
+            regionCode = 'DE';
+            country = '德国';
+          } else if (节点名称大写.includes('GB') || 节点名称大写.includes('英国')) {
+            regionCode = 'GB';
+            country = '英国';
+          } else if (节点名称大写.includes('NL') || 节点名称大写.includes('荷兰')) {
+            regionCode = 'NL';
+            country = '荷兰';
+          } else if (节点名称大写.includes('FI') || 节点名称大写.includes('芬兰')) {
+            regionCode = 'FI';
+            country = '芬兰';
+          } else if (节点名称大写.includes('SE') || 节点名称大写.includes('瑞典')) {
+            regionCode = 'SE';
+            country = '瑞典';
+          } else if (节点名称大写.includes('AU') || 节点名称大写.includes('澳大利亚') || 节点名称大写.includes('悉尼')) {
+            regionCode = 'AU';
+            country = '澳大利亚';
+          } else if (节点名称大写.includes('NZ') || 节点名称大写.includes('新西兰') || 节点名称大写.includes('奥克兰')) {
+            regionCode = 'NZ';
+            country = '新西兰';
+          } else if (节点名称大写.includes('IN') || 节点名称大写.includes('印度')) {
+            regionCode = 'IN';
+            country = '印度';
+          } else if (节点名称大写.includes('TH') || 节点名称大写.includes('泰国')) {
+            regionCode = 'TH';
+            country = '泰国';
+          } else if (节点名称大写.includes('VN') || 节点名称大写.includes('越南')) {
+            regionCode = 'VN';
+            country = '越南';
+          } else if (节点名称大写.includes('MY') || 节点名称大写.includes('马来西亚')) {
+            regionCode = 'MY';
+            country = '马来西亚';
+          }
+          if (!regionCode) {
+            regionCode = 'US';
+            country = '美国';
+          }
+          let 解析IP = 本地值108[1];
+          if (解析IP.startsWith('[') && 解析IP.endsWith(']')) {
+            解析IP = 解析IP.substring(1, 解析IP.length - 1);
+          }
           结果列表110.push({
-            ip: 本地值108[1],
+            ip: 解析IP,
             port: parseInt(本地值108[2] || '443', 10),
-            name: 本地值108[3]?.trim() || 本地值108[1]
+            name: 节点名称,
+            regionCode,
+            country
           });
         }
       }
@@ -8287,10 +8362,79 @@ async function 获取值解析新地址列表() {
       if (!值行) continue;
       const 本地值102 = 值行.match(值正则);
       if (本地值102) {
+        const 节点名称 = 本地值102[3].trim() || 本地值102[1];
+        let regionCode = '';
+        let country = '';
+        const 节点名称大写 = 节点名称.toUpperCase();
+        if (节点名称大写.includes('HKG') || 节点名称大写.includes('香港') || 节点名称大写.includes('HK')) {
+          regionCode = 'HK';
+          country = '香港';
+        } else if (节点名称大写.includes('SIN') || 节点名称大写.includes('新加坡') || 节点名称大写.includes('SG')) {
+          regionCode = 'SG';
+          country = '新加坡';
+        } else if (节点名称大写.includes('JP') || 节点名称大写.includes('东京') || 节点名称大写.includes('NRT') || 节点名称大写.includes('日本')) {
+          regionCode = 'JP';
+          country = '日本';
+        } else if (节点名称大写.includes('US') || 节点名称大写.includes('美国') || 节点名称大写.includes('LAX') || 节点名称大写.includes('DEN') || 节点名称大写.includes('IAD') || 节点名称大写.includes('IAH') || 节点名称大写.includes('SJC')) {
+          regionCode = 'US';
+          country = '美国';
+        } else if (节点名称大写.includes('KR') || 节点名称大写.includes('韩国')) {
+          regionCode = 'KR';
+          country = '韩国';
+        } else if (节点名称大写.includes('TW') || 节点名称大写.includes('台湾')) {
+          regionCode = 'TW';
+          country = '台湾';
+        } else if (节点名称大写.includes('MO') || 节点名称大写.includes('澳门')) {
+          regionCode = 'MO';
+          country = '澳门';
+        } else if (节点名称大写.includes('DE') || 节点名称大写.includes('德国') || 节点名称大写.includes('FRA')) {
+          regionCode = 'DE';
+          country = '德国';
+        } else if (节点名称大写.includes('GB') || 节点名称大写.includes('英国')) {
+          regionCode = 'GB';
+          country = '英国';
+        } else if (节点名称大写.includes('NL') || 节点名称大写.includes('荷兰')) {
+          regionCode = 'NL';
+          country = '荷兰';
+        } else if (节点名称大写.includes('FI') || 节点名称大写.includes('芬兰')) {
+          regionCode = 'FI';
+          country = '芬兰';
+        } else if (节点名称大写.includes('SE') || 节点名称大写.includes('瑞典')) {
+          regionCode = 'SE';
+          country = '瑞典';
+        } else if (节点名称大写.includes('AU') || 节点名称大写.includes('澳大利亚') || 节点名称大写.includes('悉尼')) {
+          regionCode = 'AU';
+          country = '澳大利亚';
+        } else if (节点名称大写.includes('NZ') || 节点名称大写.includes('新西兰') || 节点名称大写.includes('奥克兰')) {
+          regionCode = 'NZ';
+          country = '新西兰';
+        } else if (节点名称大写.includes('IN') || 节点名称大写.includes('印度')) {
+          regionCode = 'IN';
+          country = '印度';
+        } else if (节点名称大写.includes('TH') || 节点名称大写.includes('泰国')) {
+          regionCode = 'TH';
+          country = '泰国';
+        } else if (节点名称大写.includes('VN') || 节点名称大写.includes('越南')) {
+          regionCode = 'VN';
+          country = '越南';
+        } else if (节点名称大写.includes('MY') || 节点名称大写.includes('马来西亚')) {
+          regionCode = 'MY';
+          country = '马来西亚';
+        }
+        if (!regionCode) {
+          regionCode = 'US';
+          country = '美国';
+        }
+        let 解析IP = 本地值102[1];
+        if (解析IP.startsWith('[') && 解析IP.endsWith(']')) {
+          解析IP = 解析IP.substring(1, 解析IP.length - 1);
+        }
         结果列表105.push({
-          ip: 本地值102[1],
+          ip: 解析IP,
           port: parseInt(本地值102[2], 10),
-          name: 本地值102[3].trim() || 本地值102[1]
+          name: 节点名称,
+          regionCode,
+          country
         });
       }
     }
@@ -8794,7 +8938,19 @@ function 更新自定义优选来源值() {
   }
 }
 function 解析值值数组(值值) {
-  if (!值值 || !值值.trim()) return [];
+  if (Array.isArray(值值)) {
+    return 值值.map(项目 => ({
+      ip: 项目.ip,
+      port: 项目.port || 443,
+      name: 项目.name || `${项目.ip}${项目.port ? ':' + 项目.port : ''}`,
+      regionCode: 项目.regionCode || '',
+      country: 项目.country || '',
+      city: 项目.city || '',
+      sourceType: 项目.sourceType || '',
+      addedAt: 项目.addedAt || new Date().toISOString()
+    })).filter(项目 => 项目.ip);
+  }
+  if (typeof 值值 !== 'string' || !值值 || !值值.trim()) return [];
   const 去空格值 = 值值.trim();
   if (去空格值.startsWith('[')) {
     try {
@@ -8873,7 +9029,10 @@ async function 获取优选接口(网址列表, 默认端口 = '443', 超时 = 3
       const 控制器 = new AbortController();
       const 超时标识 = setTimeout(() => 控制器.abort(), 超时);
       const 响应 = await fetch(网址, {
-        signal: 控制器.signal
+        signal: 控制器.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
       });
       clearTimeout(超时标识);
       let 文本 = '';
@@ -8901,7 +9060,7 @@ async function 获取优选接口(网址列表, 默认端口 = '443', 超时 = 3
           }
         }
         if (!解码成功) {
-          文本 = await 响应.text();
+          文本 = new TextDecoder('utf-8').decode(缓冲);
         }
         if (!文本 || 文本.trim().length === 0) {
           return;
@@ -8916,15 +9075,27 @@ async function 获取优选接口(网址列表, 默认端口 = '443', 超时 = 3
         行列表.forEach(行13 => {
           const 井号索引 = 行13.indexOf('#');
           const [主机部分, 备注] = 井号索引 > -1 ? [行13.substring(0, 井号索引), 行13.substring(井号索引)] : [行13, ''];
-          let 是否有端口 = false;
+          let 地址部分 = 主机部分;
+          let 端口值 = '';
           if (主机部分.startsWith('[')) {
-            是否有端口 = /\]:(\d+)$/.test(主机部分);
+            const 匹配 = 主机部分.match(/^\[([^\]]+)\](?::(\d+))?$/);
+            if (匹配) {
+              地址部分 = `[${匹配[1]}]`;
+              端口值 = 匹配[2] || '';
+            }
           } else {
             const 值索引 = 主机部分.lastIndexOf(':');
-            是否有端口 = 值索引 > -1 && /^\d+$/.test(主机部分.substring(值索引 + 1));
+            const 是否有端口 = 值索引 > -1 && /^\d+$/.test(主机部分.substring(值索引 + 1));
+            if (是否有端口) {
+              地址部分 = 主机部分.substring(0, 值索引);
+              端口值 = 主机部分.substring(值索引 + 1);
+            }
+            if (地址部分.includes(':')) {
+              地址部分 = `[${地址部分}]`;
+            }
           }
-          const 端口12 = new URL(网址).searchParams.get('port') || 默认端口;
-          结果列表.add(是否有端口 ? 行13 : `${主机部分}:${端口12}${备注}`);
+          const 最终端口 = 端口值 || new URL(网址).searchParams.get('port') || 默认端口;
+          结果列表.add(`${地址部分}:${最终端口}${备注}`);
         });
       } else {
         const 头部列表 = 行列表[0].split(',').map(头值11 => 头值11.trim());
