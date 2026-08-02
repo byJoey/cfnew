@@ -45,6 +45,9 @@ let 键值存储 = null;
 let 键值配置 = {};
 let 键值配置上次加载 = 0;
 const 键值缓存期限 = 30 * 1000; // 30秒缓存（短窗口内跳过版本检查）
+// 数据面路径（WebSocket 升级、扩展传输 POST）请求量最大，但不需要秒级的配置新鲜度。
+// 这两类请求用长窗口，可把热路径上的 KV 读次数降一个数量级；控制面（面板/API/订阅）仍走 30 秒。
+const 键值热路径缓存期限 = 5 * 60 * 1000;
 let 键值配置版本 = '';
 const 配置默认值 = {
   wk: '',
@@ -425,23 +428,23 @@ function 处理值应用层协议协商值(参数774) {
   const 应用层协议协商 = 规范化应用层协议协商(自定义应用层协议协商);
   if (应用层协议协商) 参数774.set('alpn', 应用层协议协商);
 }
-async function 处理值键值值(本地值773) {
+async function 处理值键值值(本地值773, 是否热路径 = false) {
   if (本地值773.C) {
     try {
       键值存储 = 本地值773.C;
-      await 加载键值配置();
+      await 加载键值配置(false, 是否热路径 ? 键值热路径缓存期限 : 键值缓存期限);
     } catch (错误772) {
       键值存储 = null;
     }
   } else {}
 }
-async function 加载键值配置(本地值771 = false) {
+async function 加载键值配置(本地值771 = false, 缓存期限 = 键值缓存期限) {
   if (!键值存储) {
     return;
   }
 
   // 短窗口内完全信任缓存，避免高频请求时打爆 KV
-  if (!本地值771 && 键值配置上次加载 > 0 && Date.now() - 键值配置上次加载 < 键值缓存期限) {
+  if (!本地值771 && 键值配置上次加载 > 0 && Date.now() - 键值配置上次加载 < 缓存期限) {
     return;
   }
   try {
@@ -645,7 +648,10 @@ export default {
           });
         }
       }
-      await 处理值键值值(本地值734);
+      // 数据面请求（WS 升级 / 扩展传输 POST）用长缓存窗口，别让每条新连接都去读一次 KV。
+      // /api/ 下的 POST 是配置写入，必须走短窗口，否则会拿着过期快照回写、覆盖别处刚改的配置。
+      const 是否数据面 = 是否网页套接字 || 是否值732 && !请求网址731.pathname.includes('/api/');
+      await 处理值键值值(本地值734, 是否数据面);
       认证令牌 = (本地值734.u || 本地值734.U || 认证令牌).toLowerCase();
       const 值路径 = (本地值734.d || 本地值734.D || 认证令牌).toLowerCase();
       const 本地值726 = 获取配置值('p', 本地值734.p || 本地值734.P);
@@ -7920,6 +7926,23 @@ const 上限值 = 32;
 function 处理扩展超文本值195(本地值194) {
   return new Promise(结果值193 => setTimeout(结果值193, 本地值194));
 }
+// 可取消的延时。用在 Promise.race 里的超时分支必须能 cancel：
+// 否则赢了竞速之后那个 setTimeout 仍然挂在 isolate 上，一直吊着待处理任务不放。
+function 创建可取消延时(毫秒值) {
+  let 标识值 = 0;
+  const 承诺值 = new Promise(完成值 => {
+    标识值 = setTimeout(完成值, 毫秒值);
+  });
+  return {
+    promise: 承诺值,
+    cancel() {
+      if (标识值) {
+        clearTimeout(标识值);
+        标识值 = 0;
+      }
+    }
+  };
+}
 function 验证唯一标识扩展超文本(标识192, 唯一标识191) {
   for (let 索引190 = 0; 索引190 < 16; 索引190++) {
     if (标识192[索引190] !== 唯一标识191[索引190]) {
@@ -8110,6 +8133,9 @@ function 创建扩展超文本值159(本地值158, 本地值157) {
 function 创建扩展超文本值(本地值150, 远程值) {
   const 计数器 = new 扩展超文本计数器();
   let 流;
+  // 提到外层，好让 abort() 也能立刻掐掉空闲定时器：
+  // 若读循环正卡在 read() 上，光 abort 流是唤不醒它的，定时器会一直挂到超时才醒
+  let 停止空闲 = () => {};
   const 本地值149 = new Promise((本地值148, 本地值147) => {
     流 = new TransformStream({
       start(控制器146) {
@@ -8127,15 +8153,36 @@ function 创建扩展超文本值(本地值150, 远程值) {
       highWaterMark: 值超文本缓冲大小
     }));
     let 值值143 = Date.now();
-    const 值计时器 = setInterval(() => {
-      if (Date.now() - 值值143 > 值超时值) {
+    // 惰性空闲定时器：到点再回看最后活动时间，没超时就按剩余时间续一次。
+    // 原来是 setInterval 每 5 秒轮询一次，整条连接活多久就空转多久；
+    // 这里每个空闲周期最多醒两次，行为（45 秒无下行数据即中断）不变。
+    let 空闲标识 = 0;
+    let 空闲已停 = false;
+    function 安排空闲检查(延时值) {
+      空闲标识 = setTimeout(() => {
+        空闲标识 = 0;
+        if (空闲已停) return;
+        const 剩余值 = 值超时值 - (Date.now() - 值值143);
+        if (剩余值 > 0) {
+          安排空闲检查(剩余值);
+          return;
+        }
         try {
           流.writable.abort?.('idle timeout');
         } catch (忽略值142) {}
-        clearInterval(值计时器);
+        空闲已停 = true;
         本地值147('idle timeout');
+      }, 延时值);
+    }
+    function 停止空闲检查() {
+      空闲已停 = true;
+      if (空闲标识) {
+        clearTimeout(空闲标识);
+        空闲标识 = 0;
       }
-    }, 5000);
+    }
+    停止空闲 = 停止空闲检查;
+    安排空闲检查(值超时值);
     const 读取器 = 远程值.getReader();
     const 写入器 = 流.writable.getWriter();
     ;
@@ -8165,7 +8212,7 @@ function 创建扩展超文本值(本地值150, 远程值) {
         try {
           写入器.releaseLock();
         } catch (忽略值138) {}
-        clearInterval(值计时器);
+        停止空闲检查();
       }
     })();
   });
@@ -8174,6 +8221,7 @@ function 创建扩展超文本值(本地值150, 远程值) {
     counter: 计数器,
     done: 本地值149,
     abort: () => {
+      停止空闲();
       try {
         流.readable.cancel();
       } catch (忽略值137) {}
@@ -8197,10 +8245,15 @@ async function 连接值远程扩展超文本(本地值135, ...本地值134) {
           hostname: 主机名,
           port: 本地值135.port
         });
-        const 超时承诺 = 处理扩展超文本值195(连接超时值).then(() => {
-          throw new Error(atob('Y29ubmVjdCB0aW1lb3V0'));
-        });
-        await Promise.race([远程.opened, 超时承诺]);
+        const 连接超时 = 创建可取消延时(连接超时值);
+        try {
+          await Promise.race([远程.opened, 连接超时.promise.then(() => {
+            throw new Error(atob('Y29ubmVjdCB0aW1lb3V0'));
+          })]);
+        } finally {
+          // 建连成功也要清掉，否则每次建连都留一个 5 秒的挂起定时器
+          连接超时.cancel();
+        }
         const 本地值132 = 创建扩展超文本值159(本地值135, 远程.writable);
         const 本地值131 = 创建扩展超文本值(本地值135.resp, 远程.readable);
         return {
@@ -8245,6 +8298,9 @@ async function 处理扩展超文本客户端(主体128, 唯一标识) {
     if (远程连接 === null) {
       return null;
     }
+    // 这里原来还 race 了一个 sleep(值超时值)，等于给每条连接加了 45 秒的绝对上限：
+    // 正在正常传数据的连接也会被掐断，客户端随即重连，一条活跃连接每天要烧掉近 2000 次请求。
+    // 兜底交给 downloader 自带的空闲超时（45 秒无下行数据即中断），这里只等两端自然结束。
     const 连接值 = Promise.race([(async () => {
       try {
         await 远程连接.downloader.done;
@@ -8253,7 +8309,7 @@ async function 处理扩展超文本客户端(主体128, 唯一标识) {
       try {
         await 远程连接.uploader.done;
       } catch (错误123) {}
-    })(), 处理扩展超文本值195(值超时值).then(() => {})]).finally(() => {
+    })()]).finally(() => {
       try {
         远程连接.close();
       } catch (忽略值122) {}
