@@ -9,6 +9,113 @@ function 解码64(文本) {
   return 基础64文本解码器.decode(字节);
 }
 let 认证令牌 = '351c9981-04b6-4103-aa4b-864aa9c91469';
+let 全局用户列表 = [];
+let 全局用户Map = new Map();
+let 全局UUID字节集合 = [];
+let 全局Trojan密码Map = new Map();
+
+function 是否有效UUID格式(文本) {
+  if (!文本 || typeof 文本 !== 'string') return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(文本.trim());
+}
+
+async function 初始化多用户池(配置字符串, 全局Trojan密码 = '') {
+  const 结果列表 = [];
+  const 密码Map = new Map();
+  const 用户Map = new Map();
+  const 字节集合 = [];
+  
+  if (!配置字符串) 配置字符串 = '351c9981-04b6-4103-aa4b-864aa9c91469';
+  const 条目列表 = 配置字符串.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+  
+  for (let i = 0; i < 条目列表.length; i++) {
+    const 条目 = 条目列表[i];
+    let uuidStr = 条目;
+    let 用户名 = '';
+    
+    if (条目.includes('#')) {
+      const parts = 条目.split('#');
+      uuidStr = parts[0].trim().toLowerCase();
+      用户名 = parts.slice(1).join('#').trim();
+    } else {
+      uuidStr = 条目.trim().toLowerCase();
+    }
+    
+    if (!是否有效UUID格式(uuidStr)) continue;
+    
+    if (!用户名) {
+      用户名 = i === 0 ? 'Admin' : `User-${uuidStr.substring(0, 8)}`;
+    }
+    
+    const 字节 = 获取唯一标识字节(uuidStr);
+    if (!字节) continue;
+    
+    const trojanPass = 全局Trojan密码 ? 全局Trojan密码 : uuidStr;
+    const trojanHash = await 处理值224井号(trojanPass);
+    
+    const userObj = {
+      id: uuidStr,
+      name: 用户名,
+      bytes: 字节,
+      trojanPassword: trojanPass,
+      trojanHash: trojanHash,
+      isAdmin: i === 0
+    };
+    
+    结果列表.push(userObj);
+    用户Map.set(uuidStr, userObj);
+    字节集合.push(userObj);
+    if (trojanHash) {
+      密码Map.set(trojanHash, userObj);
+    }
+  }
+  
+  if (结果列表.length === 0) {
+    const 默认UUID = '351c9981-04b6-4103-aa4b-864aa9c91469';
+    const 字节 = 获取唯一标识字节(默认UUID);
+    const trojanPass = 全局Trojan密码 || 默认UUID;
+    const trojanHash = await 处理值224井号(trojanPass);
+    const defaultUser = {
+      id: 默认UUID,
+      name: 'DefaultUser',
+      bytes: 字节,
+      trojanPassword: trojanPass,
+      trojanHash: trojanHash,
+      isAdmin: true
+    };
+    结果列表.push(defaultUser);
+    用户Map.set(默认UUID, defaultUser);
+    字节集合.push(defaultUser);
+    if (trojanHash) 密码Map.set(trojanHash, defaultUser);
+  }
+  
+  全局用户列表 = 结果列表;
+  全局用户Map = 用户Map;
+  全局UUID字节集合 = 字节集合;
+  全局Trojan密码Map = 密码Map;
+  
+  return 结果列表;
+}
+
+function 匹配多用户VLESS(字节, 偏移 = 1) {
+  if (!字节 || 字节.byteLength < 偏移 + 16) return null;
+  for (const u of 全局UUID字节集合) {
+    const b = u.bytes;
+    if (
+      字节[偏移] === b[0] && 字节[偏移 + 1] === b[1] &&
+      字节[偏移 + 2] === b[2] && 字节[偏移 + 3] === b[3] &&
+      字节[偏移 + 4] === b[4] && 字节[偏移 + 5] === b[5] &&
+      字节[偏移 + 6] === b[6] && 字节[偏移 + 7] === b[7] &&
+      字节[偏移 + 8] === b[8] && 字节[偏移 + 9] === b[9] &&
+      字节[偏移 + 10] === b[10] && 字节[偏移 + 11] === b[11] &&
+      字节[偏移 + 12] === b[12] && 字节[偏移 + 13] === b[13] &&
+      字节[偏移 + 14] === b[14] && 字节[偏移 + 15] === b[15]
+    ) {
+      return u;
+    }
+  }
+  return null;
+}
 let 回退地址 = '';
 let 代理5配置 = '';
 let 自定义优选地址列表 = [];
@@ -630,23 +737,38 @@ function 解析地址值端口(输入) {
 export default {
   async fetch(请求735, 本地值734, 本地值733) {
     try {
+      const 客户端IP = 请求735.headers.get('cf-connecting-ip') || 请求735.headers.get('x-real-ip') || '未知IP';
       const 是否网页套接字 = 请求735.headers.get('Upgrade') === atob('d2Vic29ja2V0');
       const 是否值732 = 请求735.method === 'POST';
       const 请求网址731 = new URL(请求735.url);
+      const 访问域名 = 请求网址731.hostname;
+      const 请求路径 = 请求网址731.pathname;
+      const 节点信息 = 请求735.cf ? `${请求735.cf.country || ''}-${请求735.cf.city || ''} (${请求735.cf.colo || ''})` : '';
+      const 客户端UA = 请求735.headers.get('User-Agent') || '';
+      
+      console.log(`[HTTP/WS请求] 来源IP: ${客户端IP} | 访问域名: ${访问域名} | 路径: ${请求路径} | 节点: ${节点信息} | UA: ${客户端UA.substring(0, 50)}`);
+
+      await 处理值键值值(本地值734);
+      
+      const 原始用户配置 = (本地值734.u || 本地值734.U || 获取配置值('u', '') || 认证令牌).toLowerCase();
+      const 密码tp = 获取配置文本值('tp', 配置默认值.tp, 本地值734.tp);
+      await 初始化多用户池(原始用户配置, 密码tp);
+      认证令牌 = 全局用户列表[0]?.id || '351c9981-04b6-4103-aa4b-864aa9c91469';
+
       const 路径值730 = 请求网址731.pathname.split('/').filter(参数值729 => 参数值729);
       if (!是否网页套接字 && !是否值732 && 请求网址731.pathname !== '/') {
-        const 值值728 = (本地值734.u || 本地值734.U || '').toLowerCase();
-        const 值值727 = (本地值734.d || 本地值734.D || '').toLowerCase();
-        const 首次值 = 路径值730[0] || '';
+        const 值值727 = (本地值734.d || 本地值734.D || 获取配置值('d', '') || '').toLowerCase();
+        const 首次值 = (路径值730[0] || '').toLowerCase();
         const 清理值 = 值值727.startsWith('/') ? 值值727.substring(1) : 值值727;
-        if (首次值 !== 值值728 && (清理值 ? 首次值 !== 清理值 : false)) {
+        const 是合法用户 = 全局用户Map.has(首次值);
+        const 是自定义路径 = 清理值 ? 首次值 === 清理值 : false;
+        if (!是合法用户 && !是自定义路径) {
+          console.log(`[404拦截] 客户端IP: ${客户端IP} | 访问未授权路径: ${请求网址731.pathname}`);
           return new Response('Not Found', {
             status: 404
           });
         }
       }
-      await 处理值键值值(本地值734);
-      认证令牌 = (本地值734.u || 本地值734.U || 认证令牌).toLowerCase();
       const 值路径 = (本地值734.d || 本地值734.D || 认证令牌).toLowerCase();
       const 本地值726 = 获取配置值('p', 本地值734.p || 本地值734.P);
       let 值自定义地址 = false;
@@ -827,7 +949,7 @@ export default {
         });
       }
       if (请求735.method === 'POST' && 启用扩展传输) {
-        const 结果值684 = await 处理扩展超文本值(请求735);
+        const 结果值684 = await 处理扩展超文本值(请求735, 客户端IP);
         if (结果值684) {
           本地值733.waitUntil(结果值684.closed);
           return new Response(结果值684.readable, {
@@ -845,7 +967,7 @@ export default {
         });
       }
       if (请求735.headers.get('Upgrade') === atob('d2Vic29ja2V0')) {
-        return await 处理网页套接字请求(请求735);
+        return await 处理网页套接字请求(请求735, 客户端IP);
       }
       if (请求735.method === 'GET') {
         // 处理 /{UUID}/region 或 /{自定义路径}/region
@@ -1636,11 +1758,14 @@ document.addEventListener('DOMContentLoaded', function () {
           }
         } else {
           if (网址698.pathname.length > 1 && 网址698.pathname !== '/' && !网址698.pathname.includes('/sub')) {
-            const 用户657 = 网址698.pathname.replace(/\/$/, '').substring(1);
+            const 用户657 = 网址698.pathname.replace(/\/$/, '').substring(1).toLowerCase();
             if (是否有效格式(用户657)) {
-              if (用户657 === 认证令牌) {
+              const 目标用户 = 全局用户Map.get(用户657);
+              if (目标用户) {
+                console.log(`[面板/主页访问] 用户: ${目标用户.name} (${目标用户.id.substring(0, 8)}) | 客户端IP: ${客户端IP}`);
                 return await 处理订阅值(请求735, 用户657);
               } else {
+                console.log(`[鉴权拦截] 客户端IP: ${客户端IP} | 未知UUID访问: ${用户657}`);
                 return new Response(JSON.stringify({
                   error: 'UUID错误 请注意变量名称是u不是uuid'
                 }), {
@@ -1655,11 +1780,14 @@ document.addEventListener('DOMContentLoaded', function () {
           if (网址698.pathname.includes('/sub')) {
             const 路径部分列表 = 网址698.pathname.split('/');
             if (路径部分列表.length === 2 && 路径部分列表[1] === 'sub') {
-              const 用户656 = 路径部分列表[0].substring(1);
+              const 用户656 = 路径部分列表[0].substring(1).toLowerCase();
               if (是否有效格式(用户656)) {
-                if (用户656 === 认证令牌) {
+                const 目标用户 = 全局用户Map.get(用户656);
+                if (目标用户) {
+                  console.log(`[拉取订阅] 用户: ${目标用户.name} (${目标用户.id.substring(0, 8)}) | 客户端IP: ${客户端IP} | Target: ${网址698.searchParams.get('target') || 'auto'}`);
                   return await 处理订阅请求(请求735, 用户656, 网址698);
                 } else {
+                  console.log(`[拉取订阅失败] 客户端IP: ${客户端IP} | 未知UUID: ${用户656}`);
                   return new Response(JSON.stringify({
                     error: 'UUID错误'
                   }), {
@@ -1674,6 +1802,7 @@ document.addEventListener('DOMContentLoaded', function () {
           }
         }
         if (网址698.pathname.toLowerCase().includes(`/${值路径}`)) {
+          console.log(`[拉取订阅(自定义路径)] 客户端IP: ${客户端IP}`);
           return await 处理订阅请求(请求735, 认证令牌);
         }
       }
@@ -3092,7 +3221,7 @@ async function 获取值解析值(网址426) {
     return [];
   }
 }
-async function 处理网页套接字请求(请求417) {
+async function 处理网页套接字请求(请求417, 客户端IP = '') {
   // 从请求URL的path query中读取客户端自定义参数
   // 从 path query 读取覆盖参数
   const 请求网址 = new URL(请求417.url);
@@ -3200,7 +3329,7 @@ async function 处理网页套接字请求(请求417) {
       }
       if (!协议类型) {
         if (启用明文 && 数据396.byteLength >= 24) {
-          const 轻量协议结果 = 解析网页套接字值头部(数据396, 认证令牌);
+          const 轻量协议结果 = 解析网页套接字值头部(数据396);
           if (!轻量协议结果.hasError) {
             协议类型 = 解码64('dmxlc3M=');
             const {
@@ -3209,32 +3338,39 @@ async function 处理网页套接字请求(请求417) {
               hostname: 主机名393,
               rawIndex: 原始索引,
               version: 本地值392,
-              isUDP: 是否用户数据报391
+              isUDP: 是否用户数据报391,
+              user: 认证用户
             } = 轻量协议结果;
+            const 用户名 = 认证用户 ? `${认证用户.name} (${认证用户.id.substring(0, 8)})` : '未知用户';
+            console.log(`[VLESS握手成功] 用户: ${用户名} | 来源IP: ${客户端IP} | 访问目标: ${主机名393}:${端口394}`);
             if (是否用户数据报391) {
               if (端口394 === 53) 是否域名系统值 = true;else throw new Error(错误_仅支持域名系统用户数据报);
             }
             const 值头部390 = new Uint8Array([本地值392[0], 0]);
             const 原始数据389 = 数据396.subarray(原始索引);
             if (是否域名系统值) return 处理值用户数据报(原始数据389, 值值410, 值头部390, 请求值407);
-            await 处理值值384(地址类型395, 主机名393, 端口394, 原始数据389, 值值410, 值头部390, 远程连接值409, 请求回退416, 实际地区411, 请求值414, 请求代理配置413, 请求值407);
+            await 处理值值384(地址类型395, 主机名393, 端口394, 原始数据389, 值值410, 值头部390, 远程连接值409, 请求回退416, 实际地区411, 请求值414, 请求代理配置413, 请求值407, 认证用户, 客户端IP);
             return;
           }
         }
         if (启用木马 && 数据396.byteLength >= 56) {
-          const 值结果 = await 解析木马头部(数据396, 认证令牌);
+          const 值结果 = await 解析木马头部(数据396);
           if (!值结果.hasError) {
             协议类型 = atob('dHJvamFu');
             const {
               addressType: 地址类型388,
               port: 端口387,
               hostname: 主机名386,
-              rawClientData: 原始客户端数据
+              rawClientData: 原始客户端数据,
+              user: 认证用户
             } = 值结果;
-            await 处理值值384(地址类型388, 主机名386, 端口387, 原始客户端数据, 值值410, null, 远程连接值409, 请求回退416, 实际地区411, 请求值414, 请求代理配置413, 请求值407);
+            const 用户名 = 认证用户 ? `${认证用户.name} (${认证用户.id.substring(0, 8)})` : '未知用户';
+            console.log(`[Trojan握手成功] 用户: ${用户名} | 来源IP: ${客户端IP} | 访问目标: ${主机名386}:${端口387}`);
+            await 处理值值384(地址类型388, 主机名386, 端口387, 原始客户端数据, 值值410, null, 远程连接值409, 请求回退416, 实际地区411, 请求值414, 请求代理配置413, 请求值407, 认证用户, 客户端IP);
             return;
           }
         }
+        console.log(`[协议鉴权失败] 来源IP: ${客户端IP} | 数据长度: ${数据396.byteLength}`);
         throw new Error('Invalid protocol or authentication failed');
       }
     }
@@ -3246,13 +3382,17 @@ async function 处理网页套接字请求(请求417) {
     webSocket: 客户端值
   });
 }
-async function 处理值值384(地址类型383, 主机, 端口数字, 原始数据, 网页套接字382, 值头部381, 远程连接值, 请求回退 = '', 请求地区 = '', 请求值380 = null, 请求代理配置 = null, 请求值379 = null) {
+async function 处理值值384(地址类型383, 主机, 端口数字, 原始数据, 网页套接字382, 值头部381, 远程连接值, 请求回退 = '', 请求地区 = '', 请求值380 = null, 请求代理配置 = null, 请求值379 = null, 用户信息 = null, 客户端IP = '') {
   // 优先使用客户端path参数，其次回退到全局配置
   const 实际回退 = 请求回退 || 回退地址;
   const 实际地区 = 请求地区 || 当前工作器地区;
   const 实际地区匹配 = 请求值380 !== null ? 请求值380 : 启用地区匹配;
   const 实际代理配置 = 请求代理配置 || 已解析代理5配置;
   const 实际代理已启用 = 请求代理配置 ? true : 是否代理已启用;
+  const 协议名 = 值头部381 ? 'VLESS' : 'Trojan';
+  const 用户名 = 用户信息 ? `${用户信息.name} (${用户信息.id.substring(0, 8)})` : '未知用户';
+  const 首跳走代理 = 仅走代理 && 实际代理已启用 ? true : 启用代理降级 ? false : 实际代理已启用;
+  console.log(`[代理出站] 用户: ${用户名} | 来源IP: ${客户端IP} | 协议: ${协议名} | 访问目标: ${主机}:${端口数字} | 方式: ${首跳走代理 ? '代理' : '直连'}`);
   const 值数据378 = 处理值值8数组(原始数据);
   async function 连接值发送(地址377, 端口376, 值代理 = false) {
     // 走代理时首包交给握手函数在释放写入器前发出，避免换写入器导致连接被重置
@@ -3568,17 +3708,24 @@ function 处理值唯一标识(字节301, 偏移300, 令牌299) {
   const 标识298 = 获取唯一标识字节(令牌299);
   return !!标识298 && 字节301[偏移300] === 标识298[0] && 字节301[偏移300 + 1] === 标识298[1] && 字节301[偏移300 + 2] === 标识298[2] && 字节301[偏移300 + 3] === 标识298[3] && 字节301[偏移300 + 4] === 标识298[4] && 字节301[偏移300 + 5] === 标识298[5] && 字节301[偏移300 + 6] === 标识298[6] && 字节301[偏移300 + 7] === 标识298[7] && 字节301[偏移300 + 8] === 标识298[8] && 字节301[偏移300 + 9] === 标识298[9] && 字节301[偏移300 + 10] === 标识298[10] && 字节301[偏移300 + 11] === 标识298[11] && 字节301[偏移300 + 12] === 标识298[12] && 字节301[偏移300 + 13] === 标识298[13] && 字节301[偏移300 + 14] === 标识298[14] && 字节301[偏移300 + 15] === 标识298[15];
 }
-function 解析网页套接字值头部(块297, 令牌) {
+function 解析网页套接字值头部(块297, 令牌 = null) {
   const 字节296 = 处理值值8数组(块297);
   if (字节296.byteLength < 24) return {
     hasError: true,
     message: 错误_无效数据
   };
   const 本地值295 = 字节296.subarray(0, 1);
-  if (!处理值唯一标识(字节296, 1, 令牌)) return {
-    hasError: true,
-    message: 错误_无效用户
-  };
+  let 匹配用户 = 匹配多用户VLESS(字节296, 1);
+  if (!匹配用户) {
+    if (令牌 && 处理值唯一标识(字节296, 1, 令牌)) {
+      匹配用户 = 全局用户Map.get(令牌.toLowerCase()) || { id: 令牌, name: 'User' };
+    } else {
+      return {
+        hasError: true,
+        message: 错误_无效用户
+      };
+    }
+  }
   const 值长度294 = 字节296[17];
   const 命令索引 = 18 + 值长度294;
   if (字节296.byteLength < 命令索引 + 5) return {
@@ -3646,6 +3793,7 @@ function 解析网页套接字值头部(块297, 令牌) {
   };
   return {
     hasError: false,
+    user: 匹配用户,
     addressType: 地址类型287,
     port: 端口291,
     hostname: 主机名288,
@@ -7768,10 +7916,8 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   });
 }
-async function 解析木马头部(缓冲234, 本地值233) {
+async function 解析木马头部(缓冲234, 本地值233 = null) {
   const 字节 = 处理值值8数组(缓冲234);
-  const 密码值井号 = 传输路径 || 本地值233;
-  const 值224密码 = await 处理值224井号(密码值井号);
   if (字节.byteLength < 56) {
     return {
       hasError: true,
@@ -7786,7 +7932,15 @@ async function 解析木马头部(缓冲234, 本地值233) {
     };
   }
   const 密码232 = 共享解码器.decode(字节.subarray(0, 值值索引));
-  if (密码232 !== 值224密码) {
+  let 匹配用户 = 全局Trojan密码Map.get(密码232);
+  if (!匹配用户 && (传输路径 || 本地值233)) {
+    const 指定密码 = 传输路径 || 本地值233;
+    const 指定Hash = await 处理值224井号(指定密码);
+    if (密码232 === 指定Hash) {
+      匹配用户 = 全局用户列表[0] || { id: 'admin', name: 'Admin' };
+    }
+  }
+  if (!匹配用户) {
     return {
       hasError: true,
       message: "invalid " + atob('dHJvamFu') + " password"
@@ -7846,6 +8000,7 @@ async function 解析木马头部(缓冲234, 本地值233) {
   const 端口远程 = new DataView(代理5数据缓冲.buffer, 代理5数据缓冲.byteOffset + 端口索引225, 2).getUint16(0);
   return {
     hasError: false,
+    user: 匹配用户,
     addressRemote: 地址227,
     addressType: 本地值229,
     port: 端口远程,
@@ -7966,7 +8121,7 @@ function 解析唯一标识扩展超文本(唯一标识184) {
 function 获取扩展超文本缓冲(大小) {
   return new Uint8Array(new ArrayBuffer(大小 || 值超文本缓冲大小));
 }
-async function 读取扩展超文本头部(本地值180, 唯一标识字符串) {
+async function 读取扩展超文本头部(本地值180, 唯一标识字符串 = '') {
   const 读取器179 = 本地值180.getReader({
     mode: 'byob'
   });
@@ -7978,9 +8133,14 @@ async function 读取扩展超文本头部(本地值180, 唯一标识字符串) 
     本地值177 += 结果值178.value.length;
     const 本地值176 = 缓存[0];
     const 标识175 = 缓存.slice(1, 1 + 16);
-    const 唯一标识174 = 解析唯一标识扩展超文本(唯一标识字符串);
-    if (!验证唯一标识扩展超文本(标识175, 唯一标识174)) {
-      return `invalid UUID`;
+    let 匹配用户 = 匹配多用户VLESS(标识175, 0);
+    if (!匹配用户) {
+      const 唯一标识174 = 解析唯一标识扩展超文本(唯一标识字符串);
+      if (唯一标识174 && 验证唯一标识扩展超文本(标识175, 唯一标识174)) {
+        匹配用户 = 全局用户Map.get(唯一标识字符串.toLowerCase()) || { id: 唯一标识字符串, name: 'User' };
+      } else {
+        return `invalid UUID`;
+      }
     }
     const 值长度173 = 缓存[1 + 16];
     const 地址值1 = 1 + 16 + 1 + 值长度173 + 1 + 2 + 1;
@@ -8037,6 +8197,7 @@ async function 读取扩展超文本头部(本地值180, 唯一标识字符串) 
     }
     const 数据 = 缓存.slice(头部长度);
     return {
+      user: 匹配用户,
       hostname: 主机名170,
       port: 端口172,
       data: 数据,
@@ -8222,8 +8383,9 @@ async function 连接值远程扩展超文本(本地值135, ...本地值134) {
   }
   return null;
 }
-async function 处理扩展超文本客户端(主体128, 唯一标识) {
+async function 处理扩展超文本客户端(主体128, 唯一标识, 客户端IP = '') {
   if (值值197 >= 上限值) {
+    console.log(`[xhttp限流] 客户端IP: ${客户端IP} | 连接数超限: ${值值197}`);
     return new Response('Too many connections', {
       status: 429
     });
@@ -8239,8 +8401,11 @@ async function 处理扩展超文本客户端(主体128, 唯一标识) {
   try {
     const 本地值125 = await 读取扩展超文本头部(主体128, 唯一标识);
     if (typeof 本地值125 !== 'object' || !本地值125) {
+      console.log(`[xhttp鉴权拦截] 来源IP: ${客户端IP} | 错误: ${本地值125}`);
       return null;
     }
+    const 用户名 = 本地值125.user ? `${本地值125.user.name} (${本地值125.user.id.substring(0, 8)})` : '未知用户';
+    console.log(`[xhttp出站] 用户: ${用户名} | 来源IP: ${客户端IP} | 协议: xhttp | 访问目标: ${本地值125.hostname}:${本地值125.port}`);
     const 远程连接 = await 连接值远程扩展超文本(本地值125, 回退地址, '13.230.34.30');
     if (远程连接 === null) {
       return null;
@@ -8274,9 +8439,9 @@ async function 处理扩展超文本客户端(主体128, 唯一标识) {
     return null;
   }
 }
-async function 处理扩展超文本值(请求119) {
+async function 处理扩展超文本值(请求119, 客户端IP = '') {
   try {
-    return await 处理扩展超文本客户端(请求119.body, 认证令牌);
+    return await 处理扩展超文本客户端(请求119.body, 认证令牌, 客户端IP);
   } catch (错误118) {
     return null;
   }
