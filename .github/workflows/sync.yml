@@ -1,0 +1,64 @@
+name: Upstream Sync
+
+permissions:
+  contents: write
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync_latest_from_upstream:
+    name: Sync latest commits from upstream repo
+    runs-on: ubuntu-latest
+    if: ${{ github.event.repository.fork }}
+
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v6
+
+      - name: Sync upstream changes
+        id: sync
+        uses: aormsby/fork-sync-with-upstream-action@v3.4.3
+        with:
+          upstream_sync_repo: byJoey/cfnew
+          upstream_sync_branch: main
+          target_sync_branch: main
+          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
+          test_mode: false
+
+      - name: Refresh target branch after sync
+        run: |
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+
+      - name: Copy worker source to _worker.js
+        run: |
+          if [ ! -f "少年你相信光吗" ]; then
+            echo "错误：在项目根目录未找到 '少年你相信光吗' 文件。"
+            exit 1
+          fi
+
+          cp "少年你相信光吗" "_worker.js"
+          echo "成功将 '少年你相信光吗' 复制为 '_worker.js'"
+
+      - name: Commit and push _worker.js
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add _worker.js
+
+          if git diff --staged --quiet; then
+            echo "_worker.js is already up-to-date."
+          else
+            git commit -m "Update _worker.js from upstream sync"
+            git push origin HEAD:main
+          fi
+
+      - name: Sync check
+        if: failure()
+        run: |
+          echo "[Error] 自动同步或 _worker.js 生成失败，请检查上游同步状态和 '少年你相信光吗' 文件是否存在。"
+          exit 1
