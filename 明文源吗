@@ -1,5 +1,5 @@
-// CFnew - 终端 v2.9.9
-// 版本: v2.9.9 
+// CFnew - 终端 v3.0
+// 版本: v3.0 
 import { connect as 连接 } from 'cloudflare:sockets';
 const 基础64文本解码器 = new TextDecoder();
 function 解码64(文本) {
@@ -1024,8 +1024,8 @@ export default {
           const 语言值661 = 是否值664 ? 'fa-IR' : 'zh-CN';
           const 本地值660 = {
             zh: {
-              title: '终端 v2.9.9',
-              terminal: '终端 v2.9.9',
+              title: '终端 v3.0',
+              terminal: '终端 v3.0',
               congratulations: '恭喜你来到这',
               enterU: '请输入你U变量的值',
               enterD: '请输入你D变量的值',
@@ -1041,8 +1041,8 @@ export default {
               reenter: '请重新输入有效的UUID'
             },
             fa: {
-              title: 'ترمینال v2.9.9',
-              terminal: 'ترمینال v2.9.9',
+              title: 'ترمینال v3.0',
+              terminal: 'ترمینال v3.0',
               congratulations: 'تبریک می‌گوییم به شما',
               enterU: 'لطفا مقدار متغیر U خود را وارد کنید',
               enterD: 'لطفا مقدار متغیر D خود را وارد کنید',
@@ -4152,7 +4152,7 @@ async function 处理订阅值(请求241, 用户240 = null) {
         FI: '🇫🇮 芬兰',
         GB: '🇬🇧 英国'
       },
-      terminal: '终端 v2.9.9',
+      terminal: '终端 v3.0',
       githubProject: 'GitHub 项目',
       优选工具: '优选工具',
       autoDetectClient: '自动识别',
@@ -4304,7 +4304,7 @@ async function 处理订阅值(请求241, 用户240 = null) {
         FI: '🇫🇮 فنلاند',
         GB: '🇬🇧 بریتانیا'
       },
-      terminal: 'ترمینال v2.9.9',
+      terminal: 'ترمینال v3.0',
       githubProject: 'پروژه GitHub',
       优选工具: 'ابزار ترجیح IP',
       autoDetectClient: 'تشخیص خودکار',
@@ -5417,6 +5417,10 @@ async function 处理订阅值(请求241, 用户240 = null) {
                                 <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${翻译值.customIP}</label>
                                 <input type="text" id="customIP" placeholder="${是否值236 ? 'مثال: 1.2.3.4:443' : '例如: 1.2.3.4:443'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 14px;">
                                 <small style="color: #7aa9c4; font-size: 0.85rem;">${是否值236 ? 解码64('2KLYr9ix2LMg2Ygg2b7ZiNix2KogUHJveHlJUCDYs9mB2KfYsdi024w=') : 解码64('6Ieq5a6a5LmJUHJveHlJUOWcsOWdgOWSjOerr+WPow==')}</small>
+                                <div style="margin-top: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                                    <button type="button" id="ipdbPick" style="background: rgba(0, 240, 255, 0.15); border: 1px solid #00f0ff; padding: 8px 16px; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 13px; cursor: pointer; white-space: nowrap;">\u{1F310} ${是否值236 ? 'آدرس رسمی' : 解码64('55So5a6Y5pa555u06L+e')}</button>
+                                    <span id="ipdbTip" style="color: #7aa9c4; font-size: 0.82rem;">${是否值236 ? 'یک آدرس رسمی تصادفی' : 解码64('5a6Y5pa555u06L+e5Zyw5Z2A77yM6ZqP5py65oyR5LiA5Liq5aGr6L+b5LiK6Z2i')}</span>
+                                </div>
                         </div>
                         <div style="margin-bottom: 15px;">
                                 <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-weight: bold; text-shadow: 0 0 3px #00f0ff;">${翻译值.preferredIPs}</label>
@@ -6758,6 +6762,35 @@ document.addEventListener('DOMContentLoaded', function () {
       同步联动界面状态();
     });
   }
+
+  // 官方直连：内置 10 个实测可用地址，点一下随机填一个（不联网）
+  // CF 是任播，同一地址在不同位置落到的机房不同，所以不按地区区分
+  (function 初始化官方直连() {
+    const 按钮 = document.getElementById('ipdbPick');
+    const 提示框 = document.getElementById('ipdbTip');
+    const 目标输入 = document.getElementById('customIP');
+    if (!按钮 || !目标输入) return;
+
+    const 内置地址 = atob('MTcyLjcxLjIxOC4xOTAsMTYyLjE1OC4yMjguODcsMTYyLjE1OC4xODkuMTM0LDE2Mi4xNTguMjYuNjMsMTYyLjE1OC4yNS44NiwxNjIuMTU4LjI5LjIxNiwxNjIuMTU4LjIxOC4xNjAsMTYyLjE1OC4yMjcuMjE0LDE3Mi42OS4xMTguMTk4LDE3Mi42OS4xMTkuMTUw').split(',');
+    let 上一个 = '';
+
+    按钮.addEventListener('click', function () {
+      let 命中 = 内置地址[Math.floor(Math.random() * 内置地址.length)];
+      // 连点两次尽量不给同一个
+      if (内置地址.length > 1 && 命中 === 上一个) {
+        命中 = 内置地址[(内置地址.indexOf(命中) + 1) % 内置地址.length];
+      }
+      上一个 = 命中;
+      目标输入.value = 命中 + ':443';
+      目标输入.dispatchEvent(new Event('input', {
+        bubbles: true
+      }));
+      if (提示框) {
+        提示框.textContent = 命中 + ':443';
+        提示框.style.color = '#00ff9d';
+      }
+    });
+  })();
 
   const 自定义路径输入 = document.getElementById('customPath');
   if (自定义路径输入) {
