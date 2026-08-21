@@ -270,6 +270,45 @@ const 直连域名列表 = [{
   name: "speed.marisalnc.com",
   domain: "speed.marisalnc.com"
 }, {
+  name: "Visa中国",
+  domain: "www.visa.cn"
+}, {
+  name: "Shopify官方",
+  domain: "www.shopify.com"
+}, {
+  name: "Ubisoft",
+  domain: "store.ubi.com"
+}, {
+  name: "NexusMods",
+  domain: "staticdelivery.nexusmods.com"
+}, {
+  name: "乌克兰外交部",
+  domain: "mfa.gov.ua"
+}, {
+  name: "Time.is",
+  domain: "time.is"
+}, {
+  name: "iCook香港",
+  domain: "icook.hk"
+}, {
+  name: "iCook台湾",
+  domain: "icook.tw"
+}, {
+  name: "腾讯App三网",
+  domain: "cf.tencentapp.cn"
+}, {
+  name: "MIYU优选",
+  domain: "saas.sin.fan"
+}, {
+  name: "NB优选",
+  domain: "cloudflare-dl.byoip.top"
+}, {
+  name: "秋名山优选",
+  domain: "cf.877774.xyz"
+}, {
+  name: "Mingyu移动",
+  domain: "bestcf.030101.xyz"
+}, {
   domain: "freeyx.cloudflare88.eu.org"
 }, {
   domain: "bestcf.top"
