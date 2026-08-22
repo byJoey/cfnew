@@ -1,0 +1,11 @@
+name = "cfnew-geo-regress-2026-07-15t14-54-09-669z"
+main = "worker.deploy.mjs"
+compatibility_date = "2026-01-20"
+workers_dev = true
+
+kv_namespaces = [
+  { binding = "C", id = "c803256867304f3abd4dfb9b53415b6b" }
+]
+
+[vars]
+u = "1a09ac29-4109-4af2-9c97-44561fe2b99e"

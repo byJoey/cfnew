@@ -1,0 +1,11 @@
+name = "edge-33355ff2"
+main = "worker.deploy.mjs"
+compatibility_date = "2026-01-20"
+workers_dev = true
+
+kv_namespaces = [
+  { binding = "C", id = "42c83b0ac7c64bc79e2d110d48bdccc3" }
+]
+
+[vars]
+u = "8743f0d7-93d4-4587-8ba9-ff43176022f2"
