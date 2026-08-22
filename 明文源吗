@@ -1,5 +1,5 @@
 // CFnew - 终端 v3.0
-// 版本: v3.0 
+// 版本: v3.0
 import { connect as 连接 } from 'cloudflare:sockets';
 const 基础64文本解码器 = new TextDecoder();
 function 解码64(文本) {
@@ -39,7 +39,7 @@ const 远程配置网址 = 'https://raw.githubusercontent.com/byJoey/test/refs/h
 let 启用优选域名 = true; // 优选域名默认关闭
 let 启用优选地址 = true;
 let 启用仓库优选 = true;
-let 启用原生地址 = false; // 原生地址默认关闭          
+let 启用原生地址 = false; // 原生地址默认关闭
 
 let 键值存储 = null;
 let 键值配置 = {};
@@ -76,7 +76,8 @@ const 配置默认值 = {
   ipv6: 'yes',
   ispMobile: 'yes',
   ispUnicom: 'yes',
-  ispTelecom: 'yes'
+  ispTelecom: 'yes',
+  sort: 'protocol'
 };
 
 function 是否开启值(值, 默认启用 = false) {
@@ -160,7 +161,8 @@ function 获取环境配置快照(环境值 = {}) {
     ipv6: ['ipv6', 'IPV6'],
     ispMobile: ['ispMobile', 'ISPMOBILE', 'ISP_MOBILE'],
     ispUnicom: ['ispUnicom', 'ISPUNICOM', 'ISP_UNICOM'],
-    ispTelecom: ['ispTelecom', 'ISPTELECOM', 'ISP_TELECOM']
+    ispTelecom: ['ispTelecom', 'ISPTELECOM', 'ISP_TELECOM'],
+    sort: ['sort', 'SORT']
   };
   const 快照 = {};
   for (const [键, 名称列表] of Object.entries(映射)) {
@@ -2633,6 +2635,7 @@ async function 获取加密客户端问候配置(域名522) {
 async function 处理订阅请求(请求507, 用户506, 网址505 = null) {
   if (!网址505) 网址505 = new URL(请求507.url);
   const 最终链接列表 = [];
+  const 排序方式 = 获取配置文本值('sort', 'protocol');
   const 工作器域名504 = 网址505.hostname;
   const 目标503 = 网址505.searchParams.get('target') || 'base64';
   const 别名命名器502 = 创建值节点命名器(false);
@@ -2645,14 +2648,28 @@ async function 处理订阅请求(请求507, 用户506, 网址505 = null) {
     加密客户端问候配置501 = `${加密客户端问候域名499}+${域名系统值500}`;
   }
   async function 添加节点列表来源列表(列表498) {
-    if (启用明文) {
-      最终链接列表.push(...生成链接列表来源源(列表498, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
-    }
-    if (启用木马) {
-      最终链接列表.push(...(await 生成木马链接列表来源源(列表498, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502)));
-    }
-    if (启用扩展传输) {
-      最终链接列表.push(...生成扩展超文本链接列表来源源(列表498, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
+    if (排序方式 === 'ip') {
+      for (const 项目 of 列表498) {
+        if (启用明文) {
+          最终链接列表.push(...生成链接列表来源源([项目], 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
+        }
+        if (启用木马) {
+          最终链接列表.push(...(await 生成木马链接列表来源源([项目], 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502)));
+        }
+        if (启用扩展传输) {
+          最终链接列表.push(...生成扩展超文本链接列表来源源([项目], 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
+        }
+      }
+    } else {
+      if (启用明文) {
+        最终链接列表.push(...生成链接列表来源源(列表498, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
+      }
+      if (启用木马) {
+        最终链接列表.push(...(await 生成木马链接列表来源源(列表498, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502)));
+      }
+      if (启用扩展传输) {
+        最终链接列表.push(...生成扩展超文本链接列表来源源(列表498, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
+      }
     }
   }
   if (启用原生地址) {
@@ -2738,14 +2755,28 @@ async function 处理订阅请求(请求507, 用户506, 网址505 = null) {
       try {
         const 新地址列表 = await 获取值解析新地址列表();
         if (新地址列表.length > 0) {
-          if (启用明文) {
-            最终链接列表.push(...生成链接列表来源新地址列表(新地址列表, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
-          }
-          if (启用木马) {
-            最终链接列表.push(...(await 生成木马链接列表来源新地址列表(新地址列表, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502)));
-          }
-          if (启用扩展传输) {
-            最终链接列表.push(...生成扩展超文本链接列表来源源(新地址列表, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
+          if (排序方式 === 'ip') {
+            for (const 项目 of 新地址列表) {
+              if (启用明文) {
+                最终链接列表.push(...生成链接列表来源新地址列表([项目], 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
+              }
+              if (启用木马) {
+                最终链接列表.push(...(await 生成木马链接列表来源新地址列表([项目], 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502)));
+              }
+              if (启用扩展传输) {
+                最终链接列表.push(...生成扩展超文本链接列表来源源([项目], 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
+              }
+            }
+          } else {
+            if (启用明文) {
+              最终链接列表.push(...生成链接列表来源新地址列表(新地址列表, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
+            }
+            if (启用木马) {
+              最终链接列表.push(...(await 生成木马链接列表来源新地址列表(新地址列表, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502)));
+            }
+            if (启用扩展传输) {
+              最终链接列表.push(...生成扩展超文本链接列表来源源(新地址列表, 用户506, 工作器域名504, 加密客户端问候配置501, false, 别名命名器502));
+            }
           }
         }
       } catch (错误486) {
@@ -4100,6 +4131,10 @@ async function 处理订阅值(请求241, 用户240 = null) {
       alpnDefault: '默认（留空，由客户端协商）',
       alpnHint: '仅添加到 TLS 节点链接参数；留空则不写 alpn。',
       saveProtocol: 解码64('5L+d5a2Y5Y2P6K6u6YWN572u'),
+      nodeSort: '节点排序方式:',
+      sortProtocol: '按协议排序',
+      sortIP: '按IP排序',
+      saveProtocol: 解码64('5L+d5a2Y5Y2P6K6u6YWN572u'),
       subscriptionConverterPlaceholder: '默认: https://url.v1.mk/sub',
       subscriptionConverterHint: 解码64('6K6i6ZiF6L2s5o2i5bey5YaF6YOo5a6e546w77yM5peg6ZyA5aSW6YOoIEFQSeOAguatpOmhueS7heS9nOWFvOWuueS/neeVme+8jOWPr+eVmeepuuOAgg=='),
       builtinPreferredHint: 解码64('5o6n5Yi26K6i6ZiF5Lit5YyF5ZCr5ZOq5Lqb5YaF572u5LyY6YCJ6IqC54K544CC6buY6K6k5YWo6YOo5ZCv55So44CC'),
@@ -4252,6 +4287,10 @@ async function 处理订阅值(请求241, 用户240 = null) {
       alpn: 'TLS ALPN',
       alpnDefault: 'پیش‌فرض (خالی، مذاکره توسط کلاینت)',
       alpnHint: 'فقط به لینک‌های TLS اضافه می‌شود؛ اگر خالی باشد alpn نوشته نمی‌شود.',
+      saveProtocol: 'ذخیره تنظیمات پروتکل',
+      nodeSort: 'روش مرتب‌سازی گره:',
+      sortProtocol: 'بر اساس پروتکل',
+      sortIP: 'بر اساس IP',
       saveProtocol: 'ذخیره تنظیمات پروتکل',
       subscriptionConverterPlaceholder: 'پیش‌فرض: https://url.v1.mk/sub',
       subscriptionConverterHint: 'تبدیل اشتراک به صورت داخلی پیاده‌سازی شده است و نیازی به API خارجی ندارد. این فیلد فقط برای سازگاری حفظ شده و می‌توان آن را خالی گذاشت.',
@@ -5377,6 +5416,13 @@ async function 处理订阅值(请求241, 用户240 = null) {
                                     </div>
                                 </div>
                                 <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(0, 240, 255, 0.3);">
+                                        <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-size: 0.95rem;">${翻译值.nodeSort}</label>
+                                        <select id="nodeSort" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 13px; margin-bottom: 15px;">
+                                            <option value="protocol">${翻译值.sortProtocol}</option>
+                                            <option value="ip">${翻译值.sortIP}</option>
+                                        </select>
+                                </div>
+                                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(0, 240, 255, 0.3);">
                                         <label style="display: block; margin-bottom: 8px; color: #00f0ff; font-size: 0.95rem;">${翻译值.altPassword}</label>
                                         <input type="text" id="tp" placeholder="${翻译值.altPasswordPlaceholder}" style="width: 100%; padding: 10px; background: rgba(0, 0, 0, 0.8); border: 1px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 13px;">
                                         <small style="color: #7aa9c4; font-size: 0.8rem; display: block; margin-top: 5px;">${翻译值.altPasswordHint}</small>
@@ -5409,7 +5455,7 @@ async function 处理订阅值(请求241, 用户240 = null) {
                                 <input type="text" id="yxURL" placeholder="${是否值236 ? 'URL منبع لیست IP ترجیحی را وارد کنید' : '输入优选IP列表来源URL'}" style="width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.8); border: 2px solid #00f0ff; color: #00f0ff; font-family: 'Courier New', monospace; font-size: 14px;">
                                 <small style="color: #7aa9c4; font-size: 0.85rem;">${是否值236 ? 'URL منبع لیست IP ترجیحی سفارشی، اگر خالی بگذارید از آدرس پیش‌فرض استفاده می‌شود' : '自定义优选IP列表来源URL，留空则使用默认地址'}</small>
                         </div>
-                        
+
                         <div style="margin-bottom: 20px; padding: 15px; background: rgba(20, 5, 50, 0.6); border: 2px solid #7aa9c4; border-radius: 8px;">
                             <h4 style="color: #00f0ff; margin: 0 0 15px 0; font-size: 1.1rem; text-shadow: 0 0 5px #00f0ff;">⚡ ${翻译值.latencyTest}</h4>
                             <div style="display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; align-items: center;">
@@ -5614,7 +5660,7 @@ async function 处理订阅值(请求241, 用户240 = null) {
                 </div>
                 <div id="statusMessage" style="display: none; padding: 10px; margin: 10px 0; border: 1px solid #00f0ff; background: rgba(8, 4, 28, 0.8); color: #00f0ff; text-shadow: 0 0 5px #00f0ff;"></div>
             </div>
-            
+
             <div class="card">
                     <h2 class="card-title">${翻译值.relatedLinks}</h2>
                 <div style="text-align: center; margin: 20px 0;">
@@ -6404,6 +6450,7 @@ function 应用配置到界面(配置) {
   写入字段值('customDNS', 配置.customDNS);
   写入字段值('customECHDomain', 配置.customECHDomain);
   写入字段值('alpn', 配置.alpn);
+  写入字段值('nodeSort', 配置.sort || 'protocol');
   写入字段值('scu', 配置.scu);
   写入开关值('ena', 配置.ena, false);
   写入开关值('epd', 配置.epd, true);
@@ -6439,6 +6486,7 @@ function 收集界面配置() {
     customDNS: 读取字段值('customDNS'),
     customECHDomain: 读取字段值('customECHDomain'),
     alpn: 读取字段值('alpn'),
+    sort: 读取字段值('nodeSort') || 'protocol',
     d: 读取字段值('customPath'),
     p: 读取字段值('customIP'),
     yx: 读取字段值('yx'),
@@ -6650,7 +6698,8 @@ async function 重置全部配置() {
           ispUnicom: '',
           ispTelecom: '',
           homepage: '',
-          alpn: ''
+          alpn: '',
+          sort: 'protocol'
         })
       });
       if (响应20098.status === 503) {
