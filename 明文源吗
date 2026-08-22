@@ -1,5 +1,5 @@
-// CFnew - 终端 v2.9.9
-// 版本: v2.9.9 
+// CFnew - 终端 v3.0
+// 版本: v3.0 
 import { connect as 连接 } from 'cloudflare:sockets';
 const 基础64文本解码器 = new TextDecoder();
 function 解码64(文本) {
@@ -192,6 +192,18 @@ const 地区映射 = {
   'Vultr': ['Vultr', 'Vultr'],
   'Multacom': ['Multacom', 'Multacom']
 };
+// 官方直连地址池：内置实测可用地址，不依赖任何第三方域名
+// CF 是任播，同一地址在不同位置落到的机房不同，所以不按地区区分
+const 官方直连地址 = 解码64('MTcyLjcxLjIxOC4xOTAsMTYyLjE1OC4yMjguODcsMTYyLjE1OC4xODkuMTM0LDE2Mi4xNTguMjYuNjMsMTYyLjE1OC4yNS44NiwxNjIuMTU4LjI5LjIxNiwxNjIuMTU4LjIxOC4xNjAsMTYyLjE1OC4yMjcuMjE0LDE3Mi42OS4xMTguMTk4LDE3Mi42OS4xMTkuMTUw').split(',');
+function 取官方直连地址() {
+  const 命中 = 官方直连地址[Math.floor(Math.random() * 官方直连地址.length)];
+  return {
+    domain: 命中,
+    region: 'CF',
+    regionCode: 'CF',
+    port: 443
+  };
+}
 let 备用地址列表 = [{
   domain: 解码64('UHJveHlJUC5ISy5DTUxpdXNzc3MubmV0'),
   region: 'HK',
@@ -665,43 +677,6 @@ async function 设置配置值(键764, 值763) {
   键值配置[键764] = 值763;
   await 保存键值配置();
 }
-async function 检测工作器地区(请求762) {
-  try {
-    const 云墙国家 = 请求762.cf?.country;
-    if (云墙国家) {
-      const 国家值地区 = {
-        'US': 'US',
-        'SG': 'SG',
-        'JP': 'JP',
-        'KR': 'KR',
-        'DE': 'DE',
-        'SE': 'SE',
-        'NL': 'NL',
-        'FI': 'FI',
-        'GB': 'GB',
-        'CN': 'SG',
-        'TW': 'JP',
-        'AU': 'SG',
-        'CA': 'US',
-        'FR': 'DE',
-        'IT': 'DE',
-        'ES': 'DE',
-        'CH': 'DE',
-        'AT': 'DE',
-        'BE': 'NL',
-        'DK': 'SE',
-        'NO': 'SE',
-        'IE': 'GB'
-      };
-      if (国家值地区[云墙国家]) {
-        return 国家值地区[云墙国家];
-      }
-    }
-    return 'SG';
-  } catch (错误761) {
-    return 'SG';
-  }
-}
 async function 检查地址可用性(域名760, 端口759 = 443, 超时758 = 2000) {
   try {
     const 控制器757 = new AbortController();
@@ -720,8 +695,12 @@ async function 检查地址可用性(域名760, 端口759 = 443, 超时758 = 200
   }
 }
 async function 获取值备用地址(工作器地区753 = '', 值地区匹配752 = 启用地区匹配) {
+  // 没指定地区（wk 留空=官方直连）时走内置地址，不依赖第三方域名
+  if (!工作器地区753 || 工作器地区753 === 'CF') {
+    return 取官方直连地址();
+  }
   if (备用地址列表.length === 0) {
-    return null;
+    return 取官方直连地址();
   }
   const 可用地址列表751 = 备用地址列表.map(地址750 => ({
     ...地址750,
@@ -828,7 +807,8 @@ export default {
         值自定义地址 = true;
         当前工作器地区 = 'CUSTOM';
       } else {
-        当前工作器地区 = await 检测工作器地区(请求735);
+        // wk 留空 = 官方直连：直接用内置地址，不再探测地区去匹配第三方域名
+        当前工作器地区 = 'CF';
       }
       const 地区匹配控制724 = 获取配置文本值('rm', 配置默认值.rm, 本地值734.rm || 本地值734.RM);
       启用地区匹配 = !(地区匹配控制724 && 地区匹配控制724.toLowerCase() === 'no');
@@ -1056,10 +1036,10 @@ export default {
                   }
                 });
               } else {
-                const 值地区 = await 检测工作器地区(请求735);
+                // wk 留空 = 官方直连，用内置地址而不是探测地区
                 return new Response(JSON.stringify({
-                  region: 值地区,
-                  detectionMethod: 'API检测',
+                  region: 'CF',
+                  detectionMethod: 解码64('5a6Y5pa555u06L+e'),
                   timestamp: new Date().toISOString()
                 }), {
                   headers: {
@@ -1097,9 +1077,8 @@ export default {
             }
             if (是否有效) {
               try {
-                const 测试地区 = await 检测工作器地区(请求735);
                 return new Response(JSON.stringify({
-                  detectedRegion: 测试地区,
+                  detectedRegion: 'CF',
                   message: 'API测试完成',
                   timestamp: new Date().toISOString()
                 }), {
@@ -1192,8 +1171,8 @@ export default {
           const 语言值661 = 是否值664 ? 'fa-IR' : 'zh-CN';
           const 本地值660 = {
             zh: {
-              title: '终端 v2.9.9',
-              terminal: '终端 v2.9.9',
+              title: '终端 v3.0',
+              terminal: '终端 v3.0',
               congratulations: '恭喜你来到这',
               enterU: '请输入你U变量的值',
               enterD: '请输入你D变量的值',
@@ -1209,8 +1188,8 @@ export default {
               reenter: '请重新输入有效的UUID'
             },
             fa: {
-              title: 'ترمینال v2.9.9',
-              terminal: 'ترمینال v2.9.9',
+              title: 'ترمینال v3.0',
+              terminal: 'ترمینال v3.0',
               congratulations: 'تبریک می‌گوییم به شما',
               enterU: 'لطفا مقدار متغیر U خود را وارد کنید',
               enterD: 'لطفا مقدار متغیر D خود را وارد کنید',
@@ -2882,7 +2861,7 @@ async function 处理订阅请求(请求507, 用户506, 网址505 = null) {
         await 添加节点列表来源列表(原生列表496);
       } catch (错误495) {
         if (!当前工作器地区) {
-          当前工作器地区 = await 检测工作器地区(请求507);
+          当前工作器地区 = 'CF';
         }
         const 值备用地址494 = await 获取值备用地址(当前工作器地区);
         if (值备用地址494) {
@@ -2931,7 +2910,7 @@ async function 处理订阅请求(请求507, 用户506, 网址505 = null) {
           }
         } catch (错误489) {
           if (!当前工作器地区) {
-            当前工作器地区 = await 检测工作器地区(请求507);
+            当前工作器地区 = 'CF';
           }
           const 值备用地址488 = await 获取值备用地址(当前工作器地区);
           if (值备用地址488) {
@@ -2962,7 +2941,7 @@ async function 处理订阅请求(请求507, 用户506, 网址505 = null) {
       }
     } catch (错误486) {
       if (!当前工作器地区) {
-        当前工作器地区 = await 检测工作器地区(请求507);
+        当前工作器地区 = 'CF';
       }
       const 值备用地址485 = await 获取值备用地址(当前工作器地区);
       if (值备用地址485) {
@@ -3307,7 +3286,7 @@ async function 处理网页套接字请求(请求417) {
     } else if (手动工作器地区 && 手动工作器地区.trim()) {
       实际地区411 = 手动工作器地区.trim().toUpperCase();
     } else {
-      实际地区411 = await 检测工作器地区(请求417);
+      实际地区411 = 'CF';
     }
   } else if (请求地区415) {
     实际地区411 = 请求地区415;
@@ -4237,7 +4216,7 @@ async function 处理订阅值(请求241, 用户240 = null) {
       kvEnabled: '✅ KV存储已启用，可以使用配置管理功能',
       kvDisabled: '⚠️ KV存储未启用或未配置',
       specifyRegion: '指定地区 (wk):',
-      autoDetect: '自动检测',
+      autoDetect: 解码64('5a6Y5pa555u06L+e'),
       saveRegion: '保存地区配置',
       protocolSelection: 解码64('5Y2P6K6u6YCJ5oupOg=='),
       enableProtoV: 解码64('5ZCv55SoIFZMRVNTIOWNj+iurg=='),
@@ -4331,6 +4310,7 @@ async function 处理订阅值(请求241, 用户240 = null) {
       preferredControlYes: '关闭优选',
       preferredControlHint: '设置为"关闭优选"时只使用原生地址，不生成优选IP和域名节点',
       regionNames: {
+        CF: 解码64('8J+MkCDlrpjmlrnnm7Tov54='),
         HK: '🇭🇰 香港',
         US: '🇺🇸 美国',
         SG: '🇸🇬 新加坡',
@@ -4342,7 +4322,7 @@ async function 处理订阅值(请求241, 用户240 = null) {
         FI: '🇫🇮 芬兰',
         GB: '🇬🇧 英国'
       },
-      terminal: '终端 v2.9.9',
+      terminal: '终端 v3.0',
       githubProject: 'GitHub 项目',
       优选工具: '优选工具',
       autoDetectClient: '自动识别',
@@ -4358,7 +4338,7 @@ async function 处理订阅值(请求241, 用户240 = null) {
       proxyIPAvailable: 解码64('MTAvMTAg5Y+v55SoIChQcm94eUlQ5Z+f5ZCN6aKE6K6+5Y+v55SoKQ=='),
       smartSelection: '智能就近选择中',
       sameRegionIP: '同地区IP可用 (1个)',
-      cloudflareDetection: 'Cloudflare内置检测',
+      cloudflareDetection: 解码64('5a6Y5pa555u06L+e'),
       detectionFailed: '检测失败',
       apiTestResult: 'API检测结果: ',
       apiTestTime: '检测时间: ',
@@ -4389,7 +4369,7 @@ async function 处理订阅值(请求241, 用户240 = null) {
       kvEnabled: '✅ ذخیره‌سازی KV فعال است، می‌توانید از مدیریت تنظیمات استفاده کنید',
       kvDisabled: '⚠️ ذخیره‌سازی KV فعال نیست یا پیکربندی نشده است',
       specifyRegion: 'تعیین منطقه (wk):',
-      autoDetect: 'تشخیص خودکار',
+      autoDetect: 'اتصال مستقیم رسمی',
       saveRegion: 'ذخیره تنظیمات منطقه',
       protocolSelection: 'انتخاب پروتکل:',
       enableProtoV: 解码64('2YHYudin2YTigIzYs9in2LLbjCDZvtix2YjYqtqp2YQgVkxFU1M='),
@@ -4483,6 +4463,7 @@ async function 处理订阅值(请求241, 用户240 = null) {
       preferredControlYes: 'بستن ترجیح',
       preferredControlHint: 'وقتی "بستن ترجیح" تنظیم شود، فقط از آدرس اصلی استفاده می‌شود، گره‌های IP و دامنه ترجیحی تولید نمی‌شوند',
       regionNames: {
+        CF: '🌐 مستقیم رسمی',
         HK: '🇭🇰 هنگ کنگ',
         US: '🇺🇸 آمریکا',
         SG: '🇸🇬 سنگاپور',
@@ -4494,7 +4475,7 @@ async function 处理订阅值(请求241, 用户240 = null) {
         FI: '🇫🇮 فنلاند',
         GB: '🇬🇧 بریتانیا'
       },
-      terminal: 'ترمینال v2.9.9',
+      terminal: 'ترمینال v3.0',
       githubProject: 'پروژه GitHub',
       优选工具: 'ابزار ترجیح IP',
       autoDetectClient: 'تشخیص خودکار',
@@ -4510,7 +4491,7 @@ async function 处理订阅值(请求241, 用户240 = null) {
       proxyIPAvailable: 解码64('MTAvMTAg2K/YsSDYr9iz2KrYsdizICjYr9in2YXZhtmHINm+24zYtOKAjNmB2LHYtiBQcm94eUlQINiv2LEg2K/Ys9iq2LHYsyDYp9iz2Kop'),
       smartSelection: 'انتخاب هوشمند نزدیک در حال انجام است',
       sameRegionIP: 'IP هم‌منطقه در دسترس است (1)',
-      cloudflareDetection: 'تشخیص داخلی Cloudflare',
+      cloudflareDetection: 'اتصال مستقیم رسمی',
       detectionFailed: 'تشخیص ناموفق',
       apiTestResult: 'نتیجه تشخیص API: ',
       apiTestTime: 'زمان تشخیص: ',
@@ -6224,6 +6205,7 @@ async function 检查系统状态() {
         currentIP: '当前使用IP: ',
         regionMatch: '地区匹配: ',
         regionNames: {
+          'CF': '${解码64('8J+MkCDlrpjmlrnnm7Tov54=')}',
           'HK': '🇭🇰 香港',
           'US': '🇺🇸 美国',
           'SG': '🇸🇬 新加坡',
@@ -6245,7 +6227,7 @@ async function 检查系统状态() {
         proxyIPAvailable: '${解码64('MTAvMTAg5Y+v55SoIChQcm94eUlQ5Z+f5ZCN6aKE6K6+5Y+v55SoKQ==')}',
         smartSelection: '智能就近选择中',
         sameRegionIP: '同地区IP可用 (1个)',
-        cloudflareDetection: 'Cloudflare内置检测',
+        cloudflareDetection: '${解码64('5a6Y5pa555u06L+e')}',
         detectionFailed: '检测失败',
         unknown: '未知'
       },
@@ -6256,6 +6238,7 @@ async function 检查系统状态() {
         currentIP: 'IP فعلی: ',
         regionMatch: 'تطبیق منطقه: ',
         regionNames: {
+          'CF': '🌐 مستقیم رسمی',
           'HK': '🇭🇰 هنگ کنگ',
           'US': '🇺🇸 آمریکا',
           'SG': '🇸🇬 سنگاپور',
@@ -6277,7 +6260,7 @@ async function 检查系统状态() {
         proxyIPAvailable: '${解码64('MTAvMTAg2K/YsSDYr9iz2KrYsdizICjYr9in2YXZhtmHINm+24zYtOKAjNmB2LHYtiBQcm94eUlQINiv2LEg2K/Ys9iq2LHYsyDYp9iz2Kop')}',
         smartSelection: 'انتخاب هوشمند نزدیک در حال انجام است',
         sameRegionIP: 'IP هم‌منطقه در دسترس است (1)',
-        cloudflareDetection: 'تشخیص داخلی Cloudflare',
+        cloudflareDetection: 'اتصال مستقیم رسمی',
         detectionFailed: 'تشخیص ناموفق',
         unknown: 'ناشناخته'
       }
@@ -6948,6 +6931,7 @@ document.addEventListener('DOMContentLoaded', function () {
       同步联动界面状态();
     });
   }
+
 
   const 自定义路径输入 = document.getElementById('customPath');
   if (自定义路径输入) {
