@@ -18,7 +18,7 @@ jobs:
           echo "当前标签: $TAG_NAME"
       
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0  # 需要完整的Git历史来获取标签信息
       
