@@ -3481,9 +3481,14 @@ function 创建值值(网页套接字335) {
     flush: 刷新
   };
 }
+// 建连接口会把主机与端口直接拼成「主机:端口」，六版地址必须带方括号，否则无法解析
+function 规范化连接主机(地址值) {
+  const 文本 = String(地址值 || '');
+  return 文本.includes(':') && !/^\[.*\]$/.test(文本) ? `[${文本}]` : 文本;
+}
 function 处理打开值套接字(地址322, 端口321, 请求值320 = null) {
   const 目标 = {
-    hostname: 地址322,
+    hostname: 规范化连接主机(地址322),
     port: 端口321
   };
   if (请求值320 && typeof 请求值320.connect === 'function') return 请求值320.connect(目标);
@@ -3497,7 +3502,7 @@ async function 处理打开值套接字值(地址319, 端口318, 请求值317 = 
   } catch (错误315) {
     if (!请求值317) throw 错误315;
     const 套接字314 = 连接({
-      hostname: 地址319,
+      hostname: 规范化连接主机(地址319),
       port: 端口318
     });
     if (套接字314?.opened) await 套接字314.opened;
@@ -3831,7 +3836,7 @@ async function 处理值隧道连接(地址238值, 端口237值, 代理配置, �
     allowHalfOpen: false
   } : undefined;
   const 目标参数 = {
-    hostname: 隧道主机,
+    hostname: 规范化连接主机(隧道主机),
     port: 隧道端口
   };
   // 优先用请求自带的 fetcher 建连，回退到全局连接
