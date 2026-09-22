@@ -300,7 +300,9 @@ function 从来源生成链接(列表, 唯一标识, 工作器域名) {
         encryption: 'none',
         security: 'tls',
         sni: 工作器域名,
-        fp: 'randomized',
+        // randomized fingerprint may cause TLS compatibility issues with some Xray/uTLS clients.
+        // Use chrome as default for better compatibility.
+        fp: 'chrome',
         type: 'ws',
         host: 工作器域名,
         path: 网页套接字路径
@@ -352,7 +354,9 @@ function 从新地址生成链接(列表, 唯一标识, 工作器域名) {
       encryption: 'none',
       security: 'tls',
       sni: 工作器域名,
-      fp: 'randomized',
+      // randomized fingerprint may cause TLS compatibility issues with some Xray/uTLS clients.
+      // Use chrome as default for better compatibility.
+      fp: 'chrome',
       type: 'ws',
       host: 工作器域名,
       path: 网页套接字路径

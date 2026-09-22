@@ -24,22 +24,22 @@ jobs:
       
       - name: Check if source file exists
         run: |
-          if [ ! -f "少年你相信光吗" ]; then
-            echo "错误：在项目根目录未找到 '少年你相信光吗' 文件。"
+          if [ ! -f "明文源吗" ]; then
+            echo "错误：在项目根目录未找到 '明文源吗' 文件。"
             exit 1
           fi
-          echo "成功找到源文件 '少年你相信光吗'"
+          echo "成功找到源文件 '明文源吗'"
       
       - name: Rename file to _worker.js
         run: |
-          cp "少年你相信光吗" "_worker.js"
-          echo "成功将 '少年你相信光吗' 复制为 '_worker.js'"
+          cp "明文源吗" "_worker.js"
+          echo "成功将 '明文源吗' 复制为 '_worker.js'"
           echo "注意：文件不会提交到仓库，仅用于 Release"
       
       - name: Create zip file
         run: |
-          zip Pages.zip _worker.js wrangler.toml
-          echo "成功将 '_worker.js' 和 'wrangler.toml' 压缩为 'Pages.zip'"
+          zip Pages.zip _worker.js
+          echo "成功将 '_worker.js' 压缩为 'Pages.zip'"
       
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
@@ -57,7 +57,7 @@ jobs:
       - name: Output summary
         run: |
           echo "## 部署完成" >> $GITHUB_STEP_SUMMARY
-          echo "- 源文件: 少年你相信光吗" >> $GITHUB_STEP_SUMMARY
+          echo "- 源文件: 明文源吗" >> $GITHUB_STEP_SUMMARY
           echo "- 目标文件: _worker.js" >> $GITHUB_STEP_SUMMARY
           echo "- 压缩文件: Pages.zip" >> $GITHUB_STEP_SUMMARY
           echo "- 标签: ${{ steps.get_tag.outputs.tag_name }}" >> $GITHUB_STEP_SUMMARY
