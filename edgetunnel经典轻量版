@@ -3,7 +3,7 @@ import { connect as 连接 } from 'cloudflare:sockets';
 
 // ============================ 配置区（改这里就能用） ============================
 // 认证令牌：即连接用的 UUID。生成方式：Windows 下执行 Powershell -Command "[guid]::NewGuid()"
-let 认证令牌 = '2541f8d4-d157-46af-9169-0025bf435fbc';
+let 认证令牌 = '68ec03ae-c74c-47c7-8545-6b84f8c1c9a7';
 // 回退地址：直连失败时改走的地址，留空表示不启用
 let 回退地址 = 'pp.xy.kg';
 // 中转地址：经由中转服务器出站。格式 user:pass@host:port 或 host:port，留空表示不启用
@@ -13,7 +13,7 @@ let 中转地址 = '';
 // 每一项可以是 host:port（如 104.16.0.1:443），也可以是一个在线列表的 URL
 // （如 https://bestcf.pages.dev/vps789/top10.txt，会把里面的地址全拉进来）。
 // URL 和 host:port 可以混着填，留空就只用访问域名本身。
-let 优选地址 = '';
+let 优选地址 = 'https://bestcf.pages.dev/tiancheng/hk.txt,https://bestcf.pages.dev/tiancheng/sg.txt,https://bestcf.pages.dev/tiancheng/jp.txt,https://bestcf.pages.dev/tiancheng/kr.txt';
 // ============================================================================
 
 const 文本解码器 = new TextDecoder();
