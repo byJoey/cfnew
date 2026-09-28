@@ -1,5 +1,5 @@
-// CFnew - 终端 v3.0
-// 版本: v3.0 
+// CFnew - 终端 v3.1
+// 版本: v3.1 
 import { connect as 连接 } from 'cloudflare:sockets';
 const 基础64文本解码器 = new TextDecoder();
 function 解码64(文本) {
@@ -1021,8 +1021,8 @@ export default {
           const 语言值661 = 是否值664 ? 'fa-IR' : 'zh-CN';
           const 本地值660 = {
             zh: {
-              title: '终端 v3.0',
-              terminal: '终端 v3.0',
+              title: '终端 v3.1',
+              terminal: '终端 v3.1',
               congratulations: '恭喜你来到这',
               enterU: '请输入你U变量的值',
               enterD: '请输入你D变量的值',
@@ -1038,8 +1038,8 @@ export default {
               reenter: '请重新输入有效的UUID'
             },
             fa: {
-              title: 'ترمینال v3.0',
-              terminal: 'ترمینال v3.0',
+              title: 'ترمینال v3.1',
+              terminal: 'ترمینال v3.1',
               congratulations: 'تبریک می‌گوییم به شما',
               enterU: 'لطفا مقدار متغیر U خود را وارد کنید',
               enterD: 'لطفا مقدار متغیر D خود را وارد کنید',
@@ -2750,12 +2750,28 @@ function 解析家宽清单(原文) {
 async function 获取家宽节点() {
   const 现在 = Date.now();
   if (家宽缓存 && 现在 - 家宽缓存时间 < 家宽缓存期限) return 家宽缓存;
-  const 响应 = await fetch(家宽节点源, {
-    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/plain' },
-    cf: { cacheTtl: 1800, cacheEverything: true }
-  });
-  if (!响应.ok) throw new Error('节点源返回 ' + 响应.status);
-  const 结果 = 解析家宽清单(await 响应.text());
+  // 节点源的 TLS 很老（没有 TLS1.3，ECDHE 只有 CBC 套件），有的运行环境握不上，
+  // 握不上就退回明文再拉一次。清单本身是公开数据。
+  let 原文 = '';
+  let 最后错误 = null;
+  for (const 源 of [家宽节点源, 家宽节点源.replace(/^https:/, 'http:')]) {
+    try {
+      const 响应 = await fetch(源, {
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/plain' },
+        cf: { cacheTtl: 1800, cacheEverything: true }
+      });
+      if (!响应.ok) {
+        最后错误 = new Error('节点源返回 ' + 响应.status);
+        continue;
+      }
+      原文 = await 响应.text();
+      break;
+    } catch (错误) {
+      最后错误 = 错误;
+    }
+  }
+  if (!原文) throw 最后错误 || new Error('节点源没有返回内容');
+  const 结果 = 解析家宽清单(原文);
   if (!结果.节点列表.length || !结果.证书) throw new Error('没解析出能用的节点');
   家宽缓存 = 结果;
   家宽缓存时间 = 现在;
@@ -4367,7 +4383,7 @@ async function 处理订阅值(请求241, 用户240 = null) {
         FI: '🇫🇮 芬兰',
         GB: '🇬🇧 英国'
       },
-      terminal: '终端 v3.0',
+      terminal: '终端 v3.1',
       githubProject: 'GitHub 项目',
       优选工具: '优选工具',
       autoDetectClient: '自动识别',
@@ -4524,7 +4540,7 @@ async function 处理订阅值(请求241, 用户240 = null) {
         FI: '🇫🇮 فنلاند',
         GB: '🇬🇧 بریتانیا'
       },
-      terminal: 'ترمینال v3.0',
+      terminal: 'ترمینال v3.1',
       githubProject: 'پروژه GitHub',
       优选工具: 'ابزار ترجیح IP',
       autoDetectClient: 'تشخیص خودکار',
