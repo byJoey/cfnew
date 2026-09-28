@@ -39,7 +39,11 @@ const 远程配置网址 = 'https://raw.githubusercontent.com/byJoey/test/refs/h
 let 启用优选域名 = true; // 优选域名默认关闭
 let 启用优选地址 = true;
 let 启用仓库优选 = true;
-let 启用原生地址 = false; // 原生地址默认关闭          
+let 启用原生地址 = false; // 原生地址默认关闭
+// 家宽链式：把 VPN Gate 的住宅宽带节点当落地，cfnew 自己的节点当前置
+let 启用家宽链式 = false;
+let 家宽国家 = 'JP';
+let 家宽节点数量 = 20;          
 
 let 键值存储 = null;
 let 键值配置 = {};
@@ -76,7 +80,10 @@ const 配置默认值 = {
   ipv6: 'yes',
   ispMobile: 'yes',
   ispUnicom: 'yes',
-  ispTelecom: 'yes'
+  ispTelecom: 'yes',
+  jk: 'no',
+  jkgj: 'JP',
+  jksl: '20'
 };
 
 function 是否开启值(值, 默认启用 = false) {
@@ -160,7 +167,10 @@ function 获取环境配置快照(环境值 = {}) {
     ipv6: ['ipv6', 'IPV6'],
     ispMobile: ['ispMobile', 'ISPMOBILE', 'ISP_MOBILE'],
     ispUnicom: ['ispUnicom', 'ISPUNICOM', 'ISP_UNICOM'],
-    ispTelecom: ['ispTelecom', 'ISPTELECOM', 'ISP_TELECOM']
+    ispTelecom: ['ispTelecom', 'ISPTELECOM', 'ISP_TELECOM'],
+    jk: ['jk', 'JK'],
+    jkgj: ['jkgj', 'JKGJ'],
+    jksl: ['jksl', 'JKSL']
   };
   const 快照 = {};
   for (const [键, 名称列表] of Object.entries(映射)) {
@@ -714,6 +724,9 @@ export default {
       启用优选地址 = 获取配置开关值('epi', true, 本地值734.epi || 本地值734.EPI);
       启用仓库优选 = 获取配置开关值('egi', true, 本地值734.egi || 本地值734.EGI);
       启用原生地址 = 获取配置开关值('ena', false, 本地值734.ena || 本地值734.ENA);
+      启用家宽链式 = 获取配置开关值('jk', false, 本地值734.jk || 本地值734.JK);
+      家宽国家 = (获取配置文本值('jkgj', 配置默认值.jkgj, 本地值734.jkgj || 本地值734.JKGJ) || 'JP').toUpperCase();
+      家宽节点数量 = Math.max(1, Math.min(60, parseInt(获取配置文本值('jksl', 配置默认值.jksl, 本地值734.jksl || 本地值734.JKSL), 10) || 20));
       启用加密客户端问候 = 获取配置开关值('ech', false, 本地值734.ech || 本地值734.ECH);
 
       // 加载自定义DNS和ECH域名配置
@@ -1967,6 +1980,25 @@ function 生成值值589(链接列表588, 本地值587 = {}) {
 }
 
 // 内部生成 JSON 客户端配置（完整规则集：远端镜像）
+// sing-box 新格式要把 DNS 地址拆成 type + server + path，这里按 URL 协议归一
+function 拆域名系统地址(地址) {
+  const 文本 = String(地址 || '').trim();
+  try {
+    const 网址 = new URL(文本);
+    const 协议 = 网址.protocol.replace(':', '').toLowerCase();
+    if (协议 === 'https' || 协议 === 'http3' || 协议 === 'h3') {
+      const 输出 = { type: 'https', server: 网址.hostname };
+      if (网址.port) 输出.server_port = Number(网址.port);
+      if (网址.pathname && 网址.pathname !== '/' && 网址.pathname !== '/dns-query') 输出.path = 网址.pathname;
+      return 输出;
+    }
+    if (协议 === 'tls') return { type: 'tls', server: 网址.hostname };
+    if (协议 === 'quic') return { type: 'quic', server: 网址.hostname };
+    if (协议 === 'udp' || 协议 === 'dns') return { type: 'udp', server: 网址.hostname };
+  } catch (错误) {}
+  return { type: 'udp', server: 文本.replace(/^[a-z0-9]+:\/\//i, '').split('/')[0] || '223.5.5.5' };
+}
+
 function 生成值值数据对象(链接列表573) {
   const 节点列表572 = 链接列表573.map(解析值链接).filter(数量值571 => 数量值571 && (数量值571.proto === 解码64('dmxlc3M=') || 数量值571.proto === 解码64('dHJvamFu')));
   const 域名系统值570 = 自定义域名系统 || 'https://223.5.5.5/dns-query';
@@ -2045,27 +2077,26 @@ function 生成值值数据对象(链接列表573) {
       timestamp: true
     },
     dns: {
+      // sing-box 1.12 起 DNS 服务器改成按 type 写，旧的 address 字符串写法 1.14 已经删掉了
       servers: [{
+        ...拆域名系统地址(域名系统值570),
         tag: 'remote',
-        address: 域名系统值570,
         detour: 'select'
       }, {
+        type: 'udp',
         tag: 'local',
-        address: '223.5.5.5',
+        server: '223.5.5.5',
         detour: 'direct'
       }, {
+        type: 'fakeip',
         tag: 'fakeip',
-        address: 'fakeip'
-      }, {
-        tag: 'block',
-        address: 'rcode://success'
+        inet4_range: '198.18.0.0/15',
+        inet6_range: 'fc00::/18'
       }],
+      // 拦广告不再靠 rcode://success 的假服务器，直接用 action: reject
       rules: [{
-        outbound: 'any',
-        server: 'local'
-      }, {
         rule_set: 'geosite-category-ads-all',
-        server: 'block'
+        action: 'reject'
       }, {
         rule_set: 'geosite-cn',
         server: 'local'
@@ -2073,21 +2104,13 @@ function 生成值值数据对象(链接列表573) {
         query_type: ['A', 'AAAA'],
         server: 'fakeip'
       }],
-      fakeip: {
-        enabled: true,
-        inet4_range: '198.18.0.0/15',
-        inet6_range: 'fc00::/18'
-      },
-      independent_cache: true,
       strategy: 'ipv4_only'
     },
     inbounds: [{
       type: 'mixed',
       tag: 'mixed-in',
       listen: '127.0.0.1',
-      listen_port: 2080,
-      sniff: true,
-      sniff_override_destination: true
+      listen_port: 2080
     }, {
       type: 'tun',
       tag: 'tun-in',
@@ -2096,9 +2119,7 @@ function 生成值值数据对象(链接列表573) {
       mtu: 9000,
       auto_route: true,
       strict_route: true,
-      stack: 'mixed',
-      sniff: true,
-      sniff_override_destination: true
+      stack: 'mixed'
     }],
     outbounds: [{
       type: 'selector',
@@ -2152,24 +2173,20 @@ function 生成值值数据对象(链接列表573) {
     }, ...节点列表572.map(处理节点值出站), {
       type: 'direct',
       tag: 'direct'
-    }, {
-      type: 'block',
-      tag: 'block'
-    }, {
-      type: 'dns',
-      tag: 'dns-out'
     }],
     route: {
       rule_set: [值规则566('cn'), 值规则566('private'), 值规则566('apple'), 值规则566('apple-cn'), 值规则566('microsoft'), 值规则566('microsoft@cn'), 值规则566('google'), 值规则566('telegram'), 值规则566('openai'), 值规则566('anthropic'), 值规则566('youtube'), 值规则566('netflix'), 值规则566('disney'), 值规则566('spotify'), 值规则566('tiktok'), 值规则566('twitter'), 值规则566('facebook'), 值规则566('github'), 值规则566('geolocation-!cn'), 值规则566('category-ads-all'), 地址规则('cn'), 地址规则('private'), 地址规则('telegram')],
       rules: [{
+        action: 'sniff'
+      }, {
         protocol: 'dns',
-        outbound: 'dns-out'
+        action: 'hijack-dns'
       }, {
         ip_is_private: true,
         outbound: 'direct'
       }, {
         rule_set: 'geosite-category-ads-all',
-        outbound: 'block'
+        action: 'reject'
       }, {
         rule_set: 'geosite-private',
         outbound: 'direct'
@@ -2238,6 +2255,10 @@ function 生成值值数据对象(链接列表573) {
         outbound: 'direct'
       }],
       final: '🐟 漏网之鱼',
+      // 1.12 起出站解析域名必须显式指定用哪个 DNS，不写 1.14 会直接拒绝启动
+      default_domain_resolver: {
+        server: 'local'
+      },
       auto_detect_interface: true
     },
     experimental: {
@@ -2643,6 +2664,202 @@ async function 获取加密客户端问候配置(域名522) {
     return null;
   }
 }
+// ======================= 家宽链式（VPN Gate 住宅节点作落地） =======================
+// 思路和 WARP 套娃一样：cfnew 自己的节点当前置，落地换成别人家的宽带。
+// mihomo 的 dialer-proxy 会把 OpenVPN 的传输整个塞进前置节点里走，
+// 所以出网 IP 是日本/韩国的住宅 IP，而握手过程走的是 CF 的边缘。
+// 注意：OpenVPN 出站只有 mihomo Alpha 内核有，稳定版认不了 type: openvpn。
+const 家宽节点源 = '\x68\x74\x74\x70\x73\x3a\x2f\x2f\x77\x77\x77\x2e\x76\x70\x6e\x67\x61\x74\x65\x2e\x6e\x65\x74\x2f\x61\x70\x69\x2f\x69\x70\x68\x6f\x6e\x65\x2f';
+const 家宽缓存期限 = 30 * 60 * 1000;
+let 家宽缓存 = null;
+let 家宽缓存时间 = 0;
+let 家宽缓存键 = '';
+
+function 取家宽指令(配置文本, 指令名) {
+  const 命中 = 配置文本.match(new RegExp('^[ \\t]*' + 指令名 + '[ \\t]+(.+?)[ \\t]*$', 'm'));
+  return 命中 ? 命中[1].trim() : '';
+}
+
+function 取家宽内联块(配置文本, 标签) {
+  const 命中 = 配置文本.match(new RegExp('<' + 标签 + '>([\\s\\S]*?)<\\/' + 标签 + '>'));
+  return 命中 ? 命中[1].trim() : '';
+}
+
+function 缩进证书文本(文本, 空白) {
+  return 文本.split('\n').map(行 => 行.trim()).filter(行 => 行).map(行 => 空白 + 行).join('\n');
+}
+
+// VPN Gate 的 CSV 里 Operator/Message 两列可能自带逗号，所以只从行首按下标取需要的几列，
+// base64 配置固定是最后一列，这样多出来的逗号不会把解析冲歪。
+function 解析家宽清单(原文, 国家集合, 数量) {
+  const 候选 = [];
+  for (const 原始行 of 原文.split('\n')) {
+    const 行 = 原始行.trim();
+    if (!行 || 行.charAt(0) === '*' || 行.charAt(0) === '#') continue;
+    const 字段 = 行.split(',');
+    if (字段.length < 15) continue;
+    const 国家 = (字段[6] || '').toUpperCase();
+    if (国家集合.size && !国家集合.has(国家)) continue;
+    // 要的是"家宽"，所以把 VPN Gate 自营的机房服务器剔掉（public-vpn-* / 219.100.37.0/24），
+    // 只留志愿者共享出来的住宅宽带。实测机房那批还容易满员握手失败。
+    const 主机名 = 字段[0] || '';
+    if (主机名.indexOf('public-vpn') === 0) continue;
+    if ((字段[1] || '').indexOf('219.100.37.') === 0) continue;
+    const 配置64 = 字段[字段.length - 1];
+    if (!配置64 || 配置64.length < 100) continue;
+    候选.push({ 主机: 字段[0] || 'vpngate', 国家, 速度: parseInt(字段[4], 10) || 0, 配置64 });
+  }
+  // 按速度倒序。实测过"挑会话数最少的"，结果更差（6/12 vs 2/12）：
+  // 会话少往往是这台根本连不上，而不是空闲，所以别按会话数挑。
+  候选.sort((甲, 乙) => 乙.速度 - 甲.速度);
+  const 节点列表 = [];
+  let 证书 = null;
+  for (const 项 of 候选) {
+    if (节点列表.length >= 数量) break;
+    let 配置文本 = '';
+    try { 配置文本 = 解码64(项.配置64.replace(/\s/g, '')); } catch (错误) { continue; }
+    // 前置只能承载 TCP，UDP 的节点直接丢掉
+    if ((取家宽指令(配置文本, 'proto') || 'tcp').toLowerCase() !== 'tcp') continue;
+    const 远端 = 取家宽指令(配置文本, 'remote').split(/\s+/);
+    if (!远端[0]) continue;
+    if (!证书) {
+      const 本次证书 = {
+        ca: 取家宽内联块(配置文本, 'ca'),
+        cert: 取家宽内联块(配置文本, 'cert'),
+        key: 取家宽内联块(配置文本, 'key')
+      };
+      if (!本次证书.ca || !本次证书.cert || !本次证书.key) continue;
+      证书 = 本次证书;
+    }
+    节点列表.push({
+      主机: 项.主机,
+      国家: 项.国家,
+      地址: 远端[0],
+      端口: parseInt(远端[1], 10) || 443,
+      加密: 取家宽指令(配置文本, 'cipher') || 'AES-128-CBC',
+      摘要: 取家宽指令(配置文本, 'auth') || 'SHA1',
+      速度: 项.速度
+    });
+  }
+  return { 节点列表, 证书 };
+}
+
+async function 获取家宽节点(国家文本, 数量) {
+  const 国家集合 = new Set(String(国家文本 || '')
+    .split(/[,，\s]+/).map(值 => 值.trim().toUpperCase()).filter(值 => 值));
+  const 缓存键 = [...国家集合].sort().join('|') + '#' + 数量;
+  const 现在 = Date.now();
+  if (家宽缓存 && 家宽缓存键 === 缓存键 && 现在 - 家宽缓存时间 < 家宽缓存期限) return 家宽缓存;
+  const 响应 = await fetch(家宽节点源, {
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/plain' },
+    cf: { cacheTtl: 1800, cacheEverything: true }
+  });
+  if (!响应.ok) throw new Error('VPN Gate 返回 ' + 响应.status);
+  const 结果 = 解析家宽清单(await 响应.text(), 国家集合, 数量);
+  if (!结果.节点列表.length || !结果.证书) throw new Error('VPN Gate 没解析出可用节点');
+  家宽缓存 = 结果;
+  家宽缓存时间 = 现在;
+  家宽缓存键 = 缓存键;
+  return 结果;
+}
+
+async function 生成家宽链式值(链接列表, 国家文本, 数量) {
+  const 前置组名 = '\u26a1 CF前置';
+  const 家宽自动 = '\ud83c\udfe0 家宽自动';
+  const 家宽手选 = '\ud83c\udfe0 家宽节点';
+  const 节点选择 = '\ud83d\ude80 节点选择';
+  const 前置节点 = 链接列表.map(解析值链接)
+    .filter(项 => 项 && (项.proto === 解码64('dmxlc3M=') || 项.proto === 解码64('dHJvamFu')));
+  const 前置名称 = 前置节点.map(项 => 项.name);
+  const 域名系统 = 自定义域名系统 || 'https://223.5.5.5/dns-query';
+  let 结果;
+  try {
+    结果 = await 获取家宽节点(国家文本, 数量);
+  } catch (错误) {
+    return '# 家宽节点拉取失败：' + (错误 && 错误.message ? 错误.message : 错误) + '\n' +
+      '# VPN Gate 偶尔会抽，过几分钟再刷新订阅试试。\n';
+  }
+  const { 节点列表, 证书 } = 结果;
+  const 头部 = [
+    '# cfnew 家宽链式订阅：CF 前置 + VPN Gate 住宅落地',
+    '# 必须用 mihomo Alpha 内核，稳定版不认 type: openvpn',
+    '# 出网 IP = 落地那台住宅宽带的 IP；节点是志愿者共享的，掉线换一个就行',
+    'mixed-port: 7890',
+    'allow-lan: false',
+    'mode: rule',
+    'log-level: info',
+    'ipv6: false',
+    'unified-delay: true',
+    'tcp-concurrent: true',
+    'external-controller: 127.0.0.1:9090',
+    'dns:',
+    '  enable: true',
+    '  ipv6: false',
+    '  enhanced-mode: fake-ip',
+    '  fake-ip-range: 198.18.0.1/16',
+    '  nameserver:',
+    '    - ' + 域名系统,
+    '    - https://1.1.1.1/dns-query',
+    ''
+  ];
+  const 节点段 = ['proxies:'];
+  for (const 项 of 前置节点) 节点段.push(构建值节点行(项));
+  const 家宽名称 = [];
+  节点列表.forEach((节点, 下标) => {
+    const 编号 = String(下标 + 1).padStart(2, '0');
+    const 名称 = '\ud83c\udfe0 ' + 节点.国家 + '-家宽-' + 编号;
+    家宽名称.push(名称);
+    const 行 = [
+      '  - name: "' + 名称 + '"',
+      '    type: openvpn',
+      '    server: ' + 节点.地址,
+      '    port: ' + 节点.端口,
+      '    proto: tcp',
+      '    username: vpn',
+      '    password: vpn',
+      '    cipher: ' + 节点.加密,
+      '    auth: ' + 节点.摘要,
+      '    udp: false',
+      '    handshake-timeout: 30',
+      '    remote-dns-resolve: true',
+      '    dns: [ 8.8.8.8, 1.1.1.1 ]'
+    ];
+    // 前置有节点才套娃；一个都没有就退化成直连 VPN Gate，订阅至少还能用
+    if (前置名称.length) 行.push('    dialer-proxy: "' + 前置组名 + '"');
+    // ca/cert/key 全站共用同一份，第一个节点定锚点，后面引用，省下几百 KB
+    if (下标 === 0) {
+      行.push('    ca: &jkca |-'); 行.push(缩进证书文本(证书.ca, '      '));
+      行.push('    cert: &jkcert |-'); 行.push(缩进证书文本(证书.cert, '      '));
+      行.push('    key: &jkkey |-'); 行.push(缩进证书文本(证书.key, '      '));
+    } else {
+      行.push('    ca: *jkca'); 行.push('    cert: *jkcert'); 行.push('    key: *jkkey');
+    }
+    节点段.push(行.join('\n'));
+  });
+  const 列出 = 名称列表 => 名称列表.map(名称 => '      - "' + 名称 + '"').join('\n');
+  const 分组段 = ['proxy-groups:'];
+  if (前置名称.length) {
+    分组段.push('  - name: "' + 前置组名 + '"', '    type: url-test',
+      '    url: https://www.gstatic.com/generate_204', '    interval: 300', '    tolerance: 50',
+      '    proxies:', 列出(前置名称));
+  }
+  分组段.push('  - name: "' + 家宽自动 + '"', '    type: fallback',
+    '    url: https://www.gstatic.com/generate_204', '    interval: 600', '    lazy: true',
+    '    proxies:', 列出(家宽名称));
+  分组段.push('  - name: "' + 家宽手选 + '"', '    type: select', '    proxies:', 列出(家宽名称));
+  const 主选列表 = ['      - "' + 家宽自动 + '"', '      - "' + 家宽手选 + '"'];
+  if (前置名称.length) 主选列表.push('      - "' + 前置组名 + '"');
+  主选列表.push('      - DIRECT');
+  分组段.push('  - name: "' + 节点选择 + '"', '    type: select', '    proxies:', 主选列表.join('\n'));
+  const 规则段 = [
+    'rules:',
+    '  - GEOIP,LAN,DIRECT,no-resolve',
+    '  - GEOIP,CN,DIRECT,no-resolve',
+    '  - MATCH,' + 节点选择
+  ];
+  return 头部.concat(节点段, [''], 分组段, [''], 规则段, ['']).join('\n');
+}
+
 async function 处理订阅请求(请求507, 用户506, 网址505 = null) {
   if (!网址505) 网址505 = new URL(请求507.url);
   const 最终链接列表 = [];
@@ -2792,6 +3009,14 @@ async function 处理订阅请求(请求507, 用户506, 网址505 = null) {
     case 'meta':
     case 解码64('Y2xhc2htZXRh'):
       订阅内容 = 生成值值589(最终链接列表);
+      内容类型483 = 'text/yaml; charset=utf-8';
+      break;
+    case 'vg':
+    case 'vgate':
+    case 'vpngate':
+    case 'jk':
+    case 解码64('amlha3Vhbg=='):
+      订阅内容 = await 生成家宽链式值(最终链接列表, 家宽国家, 家宽节点数量);
       内容类型483 = 'text/yaml; charset=utf-8';
       break;
     case atob('c3VyZ2U='):
