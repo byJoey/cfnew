@@ -410,7 +410,9 @@ async function 处理网页套接字请求(请求, 当前回退地址 = null) {
 
 async function 转发传输控制(地址类型参数, 主机, 端口数字, 原始数据, 网页套接字, 响应头, 远程连接包装, 回退地址值 = null) {
   async function 连接并发送(地址, 端口) {
-    const 远程套接字 = connect({ hostname: 地址, port: 端口 });
+    // connect() 会把 hostname 与 port 直接拼成 "主机:端口"，IPv6 地址必须带方括号，否则无法解析
+    const 连接主机 = 地址.includes(':') && !地址.startsWith('[') ? `[${地址}]` : 地址;
+    const 远程套接字 = connect({ hostname: 连接主机, port: 端口 });
     const 写入器 = 远程套接字.writable.getWriter();
     await 写入器.write(原始数据);
     写入器.releaseLock();
