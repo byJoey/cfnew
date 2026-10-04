@@ -2877,12 +2877,332 @@ async function 生成家宽链式值(链接列表) {
   return 头部.concat(节点段, [''], 分组段, [''], 规则段, ['']).join('\n');
 }
 
+// ======================= 云端中转家宽（出口放在边缘，客户端不挑内核） =======================
+// 跟上面那条链式家宽是两条不同的路，别混：
+//   链式家宽  —— 隧道由客户端内核自己拨，落地在客户端这边，只有新内核认，老的导进去报类型不认识；
+//   云端中转  —— 落地挪到 CF 边缘，边缘连住宅出口再出网，客户端拿到的还是一串普通节点。
+// 所以这条不挑客户端，各家都能直接导，订阅默认就出 base64，要别的格式加 fmt 参数。
+// 出口来自网上公开共享的住宅出口池，池子里挂的比活的多，也随时在变，
+// 客户端那边用自动组或者手动测一轮挑活的，别指望每条都能连上。
+const 云家宽源列表 = [
+  解码64('aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL1RoZVNwZWVkWC9QUk9YWS1MaXN0L21hc3Rlci9zb2NrczUudHh0'),
+  解码64('aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL2hvb2t6b2Yvc29ja3M1X2xpc3QvbWFzdGVyL3Byb3h5LnR4dA=='),
+  解码64('aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL21vbm9zYW5zL3Byb3h5LWxpc3QvbWFpbi9wcm94aWVzL3NvY2tzNS50eHQ=')
+];
+const 云家宽地理接口 = 解码64('aHR0cDovL2lwLWFwaS5jb20vYmF0Y2g=');
+const 云家宽地理字段 = 解码64('c3RhdHVzLGNvdW50cnlDb2RlLGlzcCxvcmcsYXMsbW9iaWxlLHByb3h5LGhvc3RpbmcscXVlcnk=');
+const 云家宽参数名 = 解码64('cw==');
+const 云家宽批次 = 100;
+// 公开池子里机房占了九成以上，住宅只有百分之几，所以要多采一点才够看。
+// 一次 6 批，刚好在判定接口每分钟 15 次的限额里面。
+const 云家宽采样上限 = 600;
+const 云家宽缓存期限 = 30 * 60 * 1000;
+// 单次能筛出来的就十几条，攒进存储里慢慢长。太久的会越攒越多死的，所以只留 6 小时。
+const 云家宽池键 = 解码64('eWprcG9vbA==');
+const 云家宽池期限 = 6 * 60 * 60 * 1000;
+const 云家宽池上限 = 150;
+// 公开出口死得快，不探一遍的话十条里只有一两条能连上，出去的订阅基本是废的。
+// 运行环境限制同时在建连的出站不能超过 6 条，所以固定 6 路轮着探，整体给个时间上限兜住。
+const 云家宽探活并发 = 6;
+const 云家宽探活超时 = 2000;
+const 云家宽探活预算 = 15000;
+const 云家宽探活上限 = 96;
+// 行里可能还跟着国家、延迟之类的多余字段，只认开头那组 地址:端口
+const 云家宽地址正则 = /((?:\d{1,3}\.){3}\d{1,3}):(\d{2,5})/;
+let 云家宽缓存 = null;
+let 云家宽缓存时间 = 0;
+// 机房和托管商一律剔掉，拿不准的也剔。混进机房地址就白忙了，宁可少给几条。
+const 云家宽机房词 = ['hosting', 'host', 'cloud', 'server', 'data cent', 'datacent', 'idc',
+  'colo', 'vps', 'dedicated', 'digitalocean', 'linode', 'vultr', 'hetzner', 'ovh', 'contabo',
+  'amazon', 'google', 'microsoft', 'azure', 'oracle', 'alibaba', 'tencent', 'huawei',
+  'leaseweb', 'choopa', 'm247', 'cogent', 'level 3', 'zenlayer', 'gcore', 'scaleway'];
+// 常见住宅/移动运营商。这份名单是实测迭代出来的：只靠接口的托管标记会把大批亚太住宅漏掉，
+// 只靠关键词又会把托管商收进来，两样都要。
+const 云家宽住宅词 = ['comcast', 'charter', 'spectrum', 'frontier', 'verizon', 'at&t', 'cox',
+  'centurylink', 'lumen', 'windstream', 'optimum', 'altice', 'rogers', 'bell canada', 'telus',
+  'telecom', 'telekom', 'telefonica', 'movistar', 'broadband', 'fiber', 'fibre', 'cable',
+  'dsl', 'gpon', 'ftth', 'wireless', 'mobile', 'cellular',
+  'chinanet', 'china169', 'china unicom', 'china mobile', 'china telecom', 'cernet',
+  'pldt', 'globe telecom', 'converge', 'sky cable', 'telkom', 'biznet', 'first media',
+  'myrepublic', 'indosat', 'xl axiata', 'cbn', 'linknet', 'iconpln', 'moratelindo',
+  'rostelecom', 'intersvyaz', 'ttk', 'iskratelecom', 'mts', 'beeline', 'megafon', 'er-telecom',
+  'vodafone', 'orange', 'free sas', 'bouygues', 'sfr', 'deutsche', 'unitymedia', 'kabel',
+  'jio', 'airtel', 'bsnl', 'act fibernet', 'hathway', 'excitel',
+  'viettel', 'vnpt', 'fpt', 'cmc tele', 'true internet', 'ais', '3bb', 'tot ',
+  'sk broadband', 'korea telecom', 'lg dacom', 'lg powercomm', 'hanaro',
+  'softbank', 'ocn', 'nifty', 'biglobe', 'jcom', 'arteria', 'kddi', 'dion', 'nuro',
+  'asahi net', 'so-net', 'ntt', 'open computer network',
+  'chunghwa', 'hinet', 'taiwan mobile', 'far eastone', 'kbro',
+  'pccw', 'hkbn', 'hgc', 'i-cable', 'netvigator', 'singnet', 'starhub', 'm1 ',
+  'maxis', 'celcom', 'digi', 'time dotcom', 'unifi', 'tm net',
+  'claro', 'vivo', 'oi ', 'tim ', 'net servicos', 'algar',
+  'telstra', 'tpg', 'optus', 'aussie broadband', 'iinet', 'spark', 'vocus',
+  'turk telekom', 'turkcell', 'superonline', 'etisalat', 'du ', 'stc', 'zain', 'ooredoo'];
+
+function 云家宽是否住宅(条目) {
+  if (!条目 || 条目.status !== 'success') return false;
+  // 只按托管标记剔。公开出口池里的地址常被标成代理，那是它本来的用途，不代表是机房。
+  if (条目.hosting === true) return false;
+  if (条目.mobile === true) return true;
+  const 文本 = ((条目.isp || '') + ' ' + (条目.org || '') + ' ' + (条目.as || '')).toLowerCase();
+  if (!文本.trim()) return false;
+  if (云家宽机房词.some(词 => 文本.includes(词))) return false;
+  return 云家宽住宅词.some(词 => 文本.includes(词));
+}
+
+function 云家宽解析清单(行列表, 收集器, 见过) {
+  for (const 行 of 行列表) {
+    const 命中 = 行.match(云家宽地址正则);
+    if (!命中) continue;
+    const 端口 = Number(命中[2]);
+    if (!(端口 > 0 && 端口 < 65536)) continue;
+    const 键 = 命中[1] + ':' + 端口;
+    if (见过.has(键)) continue;
+    见过.add(键);
+    收集器.push({ ip: 命中[1], port: 端口 });
+  }
+}
+
+// 几个源加起来四万多行，全部上正则光这一步就要几十毫秒，免费额度根本不够。
+// 所以这里只按换行切开，正则留给采样之后的那几百行。
+async function 云家宽拉清单() {
+  const 全部行 = [];
+  for (const 源 of 云家宽源列表) {
+    try {
+      const 响应 = await fetch(源, {
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/plain' },
+        cf: { cacheTtl: 1800, cacheEverything: true }
+      });
+      if (!响应.ok) continue;
+      const 文本 = await 响应.text();
+      for (const 行 of 文本.split('\n')) if (行.length > 8) 全部行.push(行);
+    } catch (忽略拉取) {}
+  }
+  return 全部行;
+}
+
+// 清单是按来源顺序排的，顺着截会每次都拿到同一批。洗一遍再截，让每次刷新换一批。
+function 云家宽采样(列表, 数量) {
+  const 副本 = 列表.slice();
+  const 上限 = Math.min(数量, 副本.length);
+  for (let 位 = 0; 位 < 上限; 位++) {
+    const 随机位 = 位 + Math.floor(Math.random() * (副本.length - 位));
+    const 暂存 = 副本[位];
+    副本[位] = 副本[随机位];
+    副本[随机位] = 暂存;
+  }
+  return 副本.slice(0, 上限);
+}
+
+async function 云家宽筛住宅(候选) {
+  const 住宅 = [];
+  for (let 起点 = 0; 起点 < 候选.length; 起点 += 云家宽批次) {
+    const 这批 = 候选.slice(起点, 起点 + 云家宽批次);
+    try {
+      const 响应 = await fetch(云家宽地理接口 + '?fields=' + 云家宽地理字段, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(这批.map(项 => 项.ip))
+      });
+      if (!响应.ok) continue;
+      const 数据 = await 响应.json();
+      if (!Array.isArray(数据)) continue;
+      // 按返回里的地址回查，不赌它和请求顺序一致
+      const 索引 = new Map();
+      for (const 项 of 这批) 索引.set(项.ip, 项);
+      for (const 条目 of 数据) {
+        const 项 = 索引.get(条目 && 条目.query);
+        if (!项 || !云家宽是否住宅(条目)) continue;
+        住宅.push({
+          ip: 项.ip,
+          port: 项.port,
+          国家: String(条目.countryCode || 'XX').toUpperCase(),
+          运营商: 条目.isp || ''
+        });
+      }
+    } catch (忽略判定) {}
+  }
+  return 住宅;
+}
+
+async function 云家宽读池() {
+  if (!键值存储) return [];
+  try {
+    const 原文 = await 键值存储.get(云家宽池键);
+    if (!原文) return [];
+    const 数据 = JSON.parse(原文);
+    return Array.isArray(数据) ? 数据 : [];
+  } catch (忽略读池) {
+    return [];
+  }
+}
+
+// 同一条又出现在源里就把时间戳刷新，说明它还在挂着；过期的和超出上限的丢掉。
+async function 云家宽并池(新筛出) {
+  const 现在 = Date.now();
+  const 池 = await 云家宽读池();
+  const 索引 = new Map();
+  for (const 条 of 池) {
+    if (!条 || !条.ip || !条.port) continue;
+    if (现在 - (条.t || 0) > 云家宽池期限) continue;
+    索引.set(条.ip + ':' + 条.port, 条);
+  }
+  for (const 条 of 新筛出) {
+    索引.set(条.ip + ':' + 条.port, { ip: 条.ip, port: 条.port, c: 条.国家, o: 条.运营商, t: 现在 });
+  }
+  // 新见到的排前面，截断时先丢最久没露面的
+  const 合并 = Array.from(索引.values()).sort((甲, 乙) => (乙.t || 0) - (甲.t || 0)).slice(0, 云家宽池上限);
+  if (键值存储) {
+    try {
+      await 键值存储.put(云家宽池键, JSON.stringify(合并));
+    } catch (忽略写池) {}
+  }
+  return 合并.map(条 => ({ ip: 条.ip, port: 条.port, 国家: 条.c || 'XX', 运营商: 条.o || '' }));
+}
+
+// 握手就问一句「不用认证行不行」，对端回 05 00 就算活着。只要两个来回，比发真流量省。
+async function 云家宽探一条(条目) {
+  let 套接字 = null;
+  let 计时器 = null;
+  // 关的时候千万别 await。对端连不上的时候连接还卡在建连阶段，
+  // 这时候 await 关闭会一直挂着——超时明明已经返回了，却卡在收尾上，
+  // 实测一条能拖十几秒，几十条叠起来把整个订阅拖到两分多钟。
+  const 收摊 = () => {
+    if (计时器) {
+      clearTimeout(计时器);
+      计时器 = null;
+    }
+    const 这个 = 套接字;
+    套接字 = null;
+    if (这个) {
+      try {
+        const 结果 = 这个.close();
+        if (结果 && typeof 结果.catch === 'function') 结果.catch(() => {});
+      } catch (忽略关闭) {}
+    }
+  };
+  try {
+    // 挂起的那条要自己吃掉异常，不然超时返回之后它再失败就成了没人管的拒绝
+    const 一次握手 = (async () => {
+      套接字 = 连接({ hostname: 条目.ip, port: 条目.port });
+      const 写入器 = 套接字.writable.getWriter();
+      await 写入器.write(new Uint8Array([5, 1, 0]));
+      写入器.releaseLock();
+      const 读取器 = 套接字.readable.getReader();
+      const 结果 = await 读取器.read();
+      try { 读取器.releaseLock(); } catch (忽略释放) {}
+      const 值 = 结果 && 结果.value;
+      return !!(值 && 值.length >= 2 && 值[0] === 5 && 值[1] === 0);
+    })().catch(() => false);
+    // 建连那段也得算在超时里，所以整条包进来；到点就当没通
+    const 到点 = new Promise(完成 => {
+      计时器 = setTimeout(() => 完成(false), 云家宽探活超时);
+    });
+    const 判断 = await Promise.race([一次握手, 到点]);
+    收摊();
+    return 判断;
+  } catch (忽略探活) {
+    收摊();
+    return false;
+  }
+}
+
+async function 云家宽探活(列表) {
+  const 截止 = Date.now() + 云家宽探活预算;
+  const 待探 = 列表.slice(0, 云家宽探活上限);
+  const 活的 = [];
+  let 游标 = 0;
+  const 一路 = async () => {
+    while (游标 < 待探.length) {
+      if (Date.now() >= 截止) return;
+      const 这条 = 待探[游标++];
+      if (await 云家宽探一条(这条)) 活的.push(这条);
+    }
+  };
+  // 双保险：单条万一还是有漏网的，外面再拿总时间兜一层，活的那个数组是共享的，直接读就行
+  const 全部跑完 = Promise.all(Array.from({ length: Math.min(云家宽探活并发, 待探.length) }, 一路));
+  let 总计时器 = null;
+  const 总到点 = new Promise(完成 => {
+    总计时器 = setTimeout(完成, 云家宽探活预算 + 3000);
+  });
+  try {
+    await Promise.race([全部跑完.catch(() => {}), 总到点]);
+  } finally {
+    if (总计时器) clearTimeout(总计时器);
+  }
+  return 活的;
+}
+
+async function 获取云家宽出口() {
+  const 现在 = Date.now();
+  if (云家宽缓存 && 现在 - 云家宽缓存时间 < 云家宽缓存期限) return 云家宽缓存;
+  const 全部行 = await 云家宽拉清单();
+  if (!全部行.length) throw new Error('出口清单一条都没拉到');
+  // 先洗行再上正则，解析量从四万多压到一千出头
+  const 候选 = [];
+  const 见过 = new Set();
+  云家宽解析清单(云家宽采样(全部行, 云家宽采样上限 * 2), 候选, 见过);
+  const 新筛出 = await 云家宽筛住宅(候选.slice(0, 云家宽采样上限));
+  const 住宅 = await 云家宽并池(新筛出);
+  if (!住宅.length) throw new Error('这批候选里没筛出住宅出口，过几分钟再试');
+  // 探活一个都没过，多半是探测本身被挡了，这时候宁可把没探过的全给出去，也别返回空订阅
+  const 活的 = await 云家宽探活(住宅);
+  const 出口 = 活的.length ? 活的 : 住宅;
+  出口.sort((甲, 乙) => 甲.国家 < 乙.国家 ? -1 : (甲.国家 > 乙.国家 ? 1 : 0));
+  云家宽缓存 = 出口;
+  云家宽缓存时间 = 现在;
+  return 出口;
+}
+
+// 出口地址塞进节点 path 的参数里，服务端每条连接各读各的。
+// 不带协议头，服务端对没前缀的地址按 套接字5 解，省掉一层转义。
+function 云家宽改写链接(链接, 出口地址, 新备注) {
+  const 问号位 = 链接.indexOf('?');
+  if (问号位 < 0) return null;
+  let 井号位 = 链接.indexOf('#', 问号位);
+  if (井号位 < 0) 井号位 = 链接.length;
+  const 前段 = 链接.slice(0, 问号位);
+  const 参数 = new URLSearchParams(链接.slice(问号位 + 1, 井号位));
+  const 原路径 = 参数.get('path') || '/';
+  if (原路径.includes(云家宽参数名 + '=')) return null;
+  参数.set('path', 原路径 + (原路径.includes('?') ? '&' : '?') + 云家宽参数名 + '=' + 出口地址);
+  return 前段 + '?' + 参数.toString() + '#' + encodeURIComponent(新备注);
+}
+
+async function 生成云家宽链接列表(链接列表) {
+  const 壳列表 = [];
+  for (const 链接 of 链接列表) {
+    const 项 = 解析值链接(链接);
+    if (!项) continue;
+    if (项.proto !== 解码64('dmxlc3M=') && 项.proto !== 解码64('dHJvamFu')) continue;
+    壳列表.push({ 链接, tls: !!项.tls });
+  }
+  // 边缘到出口那一跳是裸的，前面这段要是也明文就等于全程不设防，有 TLS 的就只用 TLS 的
+  const 加密壳 = 壳列表.filter(项 => 项.tls);
+  const 可用壳 = 加密壳.length ? 加密壳 : 壳列表;
+  if (!可用壳.length) throw new Error('没有能当前置的节点');
+  const 出口列表 = await 获取云家宽出口();
+  const 国家计数 = {};
+  const 结果 = [];
+  for (let 位 = 0; 位 < 出口列表.length; 位++) {
+    const 出口 = 出口列表[位];
+    const 壳 = 可用壳[位 % 可用壳.length];
+    国家计数[出口.国家] = (国家计数[出口.国家] || 0) + 1;
+    const 备注 = '\ud83c\udfe0 ' + 出口.国家 + '-云家宽-' + String(国家计数[出口.国家]).padStart(2, '0');
+    const 新链接 = 云家宽改写链接(壳.链接, 出口.ip + ':' + 出口.port, 备注);
+    if (新链接) 结果.push(新链接);
+  }
+  if (!结果.length) throw new Error('没拼出能用的节点');
+  return 结果;
+}
+
 async function 处理订阅请求(请求507, 用户506, 网址505 = null) {
   if (!网址505) 网址505 = new URL(请求507.url);
   const 最终链接列表 = [];
   const 工作器域名504 = 网址505.hostname;
   const 目标503 = 网址505.searchParams.get('target') || 'base64';
-  const 家宽目标 = ['vg', 'jk', 解码64('amlha3Vhbg==')].includes(目标503.toLowerCase());
+  const 家宽目标 = ['vg', 'jk', 解码64('amlha3Vhbg=='),
+    解码64('eWpr'), 解码64('ams1'), 解码64('amt5dW4=')].includes(目标503.toLowerCase());
   if (家宽目标 && !启用家宽链式) {
     return new Response('家宽链式没开。去配置管理勾上「开启家宽链式」，或者加环境变量 jk=yes。', {
       status: 403,
@@ -3047,6 +3367,29 @@ async function 处理订阅请求(请求507, 用户506, 网址505 = null) {
         });
       }
       内容类型483 = 'text/yaml; charset=utf-8';
+      break;
+    case 解码64('eWpr'):
+    case 解码64('ams1'):
+    case 解码64('amt5dW4='):
+      try {
+        const 云家宽链接列表 = await 生成云家宽链接列表(最终链接列表);
+        const 出口格式 = (网址505.searchParams.get(解码64('Zm10')) || '').toLowerCase();
+        if (出口格式 === atob('Y2xhc2g=') || 出口格式 === 'meta' || 出口格式 === 解码64('Y2xhc2htZXRh')) {
+          订阅内容 = 生成值值589(云家宽链接列表);
+          内容类型483 = 'text/yaml; charset=utf-8';
+        } else if (出口格式 === atob('c2luZ2JveA==') || 出口格式 === 解码64('c2luZy1ib3g=')) {
+          订阅内容 = 生成值值数据对象(云家宽链接列表);
+          内容类型483 = 'application/json; charset=utf-8';
+        } else {
+          订阅内容 = btoa(云家宽链接列表.join('\n'));
+          内容类型483 = 'text/plain; charset=utf-8';
+        }
+      } catch (错误云家宽) {
+        return new Response('云家宽出口暂时拉不到：' + (错误云家宽 && 错误云家宽.message ? 错误云家宽.message : 错误云家宽) + '\n过几分钟再更新，客户端会先用着上一份。', {
+          status: 503,
+          headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }
+        });
+      }
       break;
     case atob('c3VyZ2U='):
     case atob('c3VyZ2Uy'):
