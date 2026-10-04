@@ -2896,6 +2896,7 @@ const 云家宽批次 = 100;
 // 公开池子里机房占了九成以上，住宅只有百分之几，所以要多采一点才够看。
 // 一次 6 批，刚好在判定接口每分钟 15 次的限额里面。
 const 云家宽采样上限 = 600;
+const 云家宽片长 = 4096;
 const 云家宽缓存期限 = 30 * 60 * 1000;
 // 单次能筛出来的就十几条，攒进存储里慢慢长。太久的会越攒越多死的，所以只留 6 小时。
 const 云家宽池键 = 解码64('eWprcG9vbA==');
@@ -2950,23 +2951,12 @@ function 云家宽是否住宅(条目) {
   return 云家宽住宅词.some(词 => 文本.includes(词));
 }
 
-function 云家宽解析清单(行列表, 收集器, 见过) {
-  for (const 行 of 行列表) {
-    const 命中 = 行.match(云家宽地址正则);
-    if (!命中) continue;
-    const 端口 = Number(命中[2]);
-    if (!(端口 > 0 && 端口 < 65536)) continue;
-    const 键 = 命中[1] + ':' + 端口;
-    if (见过.has(键)) continue;
-    见过.add(键);
-    收集器.push({ ip: 命中[1], port: 端口 });
-  }
-}
 
-// 几个源加起来四万多行，全部上正则光这一步就要几十毫秒，免费额度根本不够。
-// 所以这里只按换行切开，正则留给采样之后的那几百行。
+// 几个源加起来 776KB、四万多行。免费版一个请求只有 10ms CPU，
+// 全文 split 一下就要 2.4ms，还要往数组里塞四万多个字符串。
+// 所以整段文本原样留着，取样的时候随机戳几个点读小片，CPU 只跟取样量有关、跟源多大无关。
 async function 云家宽拉清单() {
-  const 全部行 = [];
+  const 全部文本 = [];
   for (const 源 of 云家宽源列表) {
     try {
       const 响应 = await fetch(源, {
@@ -2975,24 +2965,57 @@ async function 云家宽拉清单() {
       });
       if (!响应.ok) continue;
       const 文本 = await 响应.text();
-      for (const 行 of 文本.split('\n')) if (行.length > 8) 全部行.push(行);
+      if (文本 && 文本.length > 16) 全部文本.push(文本);
     } catch (忽略拉取) {}
   }
-  return 全部行;
+  return 全部文本;
 }
 
-// 清单是按来源顺序排的，顺着截会每次都拿到同一批。洗一遍再截，让每次刷新换一批。
-function 云家宽采样(列表, 数量) {
-  const 副本 = 列表.slice();
-  const 上限 = Math.min(数量, 副本.length);
-  for (let 位 = 0; 位 < 上限; 位++) {
-    const 随机位 = 位 + Math.floor(Math.random() * (副本.length - 位));
-    const 暂存 = 副本[位];
-    副本[位] = 副本[随机位];
-    副本[随机位] = 暂存;
+// 随机戳点读片。要紧的是把片头片尾那两行不完整的掐掉——
+// 落点正好切在 1.2.3.4:10|80 中间的话，正则会捞出一个端口是 10 的假地址。
+function 云家宽片段取样(全部文本, 要几条) {
+  const 收集 = [];
+  const 见过 = new Set();
+  if (!全部文本.length) return 收集;
+  const 正则 = new RegExp(云家宽地址正则.source, 'g');
+  let 试了 = 0;
+  const 试的上限 = 要几条 * 4 + 40;
+  while (收集.length < 要几条 && 试了 < 试的上限) {
+    试了++;
+    const 文本 = 全部文本[Math.floor(Math.random() * 全部文本.length)];
+    const 落点 = Math.floor(Math.random() * Math.max(1, 文本.length - 云家宽片长));
+    const 片尾位 = 落点 + 云家宽片长;
+    let 片 = 文本.slice(落点, 片尾位);
+    // 落点是 0 的话首行本来就是完整的，不用掐；片子读到文本末尾了，尾行同理
+    let 起 = 0;
+    if (落点 > 0) {
+      const 首换行 = 片.indexOf('\n');
+      if (首换行 < 0) continue;
+      起 = 首换行 + 1;
+    }
+    let 止 = 片.length;
+    if (片尾位 < 文本.length) {
+      const 尾换行 = 片.lastIndexOf('\n');
+      if (尾换行 <= 起) continue;
+      止 = 尾换行;
+    }
+    片 = 片.slice(起, 止);
+    if (!片) continue;
+    正则.lastIndex = 0;
+    let 命中;
+    while ((命中 = 正则.exec(片)) !== null) {
+      const 端口 = Number(命中[2]);
+      if (!(端口 > 0 && 端口 < 65536)) continue;
+      const 键 = 命中[1] + ':' + 端口;
+      if (见过.has(键)) continue;
+      见过.add(键);
+      收集.push({ ip: 命中[1], port: 端口 });
+      if (收集.length >= 要几条) break;
+    }
   }
-  return 副本.slice(0, 上限);
+  return 收集;
 }
+
 
 async function 云家宽筛住宅(候选) {
   const 住宅 = [];
@@ -3136,13 +3159,11 @@ async function 云家宽探活(列表) {
 async function 获取云家宽出口() {
   const 现在 = Date.now();
   if (云家宽缓存 && 现在 - 云家宽缓存时间 < 云家宽缓存期限) return 云家宽缓存;
-  const 全部行 = await 云家宽拉清单();
-  if (!全部行.length) throw new Error('出口清单一条都没拉到');
-  // 先洗行再上正则，解析量从四万多压到一千出头
-  const 候选 = [];
-  const 见过 = new Set();
-  云家宽解析清单(云家宽采样(全部行, 云家宽采样上限 * 2), 候选, 见过);
-  const 新筛出 = await 云家宽筛住宅(候选.slice(0, 云家宽采样上限));
+  const 全部文本 = await 云家宽拉清单();
+  if (!全部文本.length) throw new Error('出口清单一条都没拉到');
+  const 候选 = 云家宽片段取样(全部文本, 云家宽采样上限);
+  if (!候选.length) throw new Error('清单里没取到可用地址');
+  const 新筛出 = await 云家宽筛住宅(候选);
   const 住宅 = await 云家宽并池(新筛出);
   if (!住宅.length) throw new Error('这批候选里没筛出住宅出口，过几分钟再试');
   // 探活一个都没过，多半是探测本身被挡了，这时候宁可把没探过的全给出去，也别返回空订阅
