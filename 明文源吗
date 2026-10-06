@@ -2879,7 +2879,7 @@ async function 生成家宽链式值(链接列表) {
 
 async function 处理订阅请求(请求507, 用户506, 网址505 = null) {
   if (!网址505) 网址505 = new URL(请求507.url);
-  const 最终链接列表 = [];
+  let 最终链接列表 = [];
   const 工作器域名504 = 网址505.hostname;
   const 目标503 = 网址505.searchParams.get('target') || 'base64';
   const 家宽目标 = ['vg', 'jk', 解码64('amlha3Vhbg==')].includes(目标503.toLowerCase());
@@ -3018,11 +3018,19 @@ async function 处理订阅请求(请求507, 用户506, 网址505 = null) {
       }
     }
   }
+  // 不把无法解析、无效端口或无效 IPv4 的链接当成可用节点。
+  最终链接列表 = 最终链接列表.filter(链接 => {
+    try {
+      const 节点网址 = new URL(链接);
+      return 节点网址.hostname && Number(节点网址.port) > 0 &&
+        (!/^[\d.]+$/.test(节点网址.hostname) || 是否有效地址(节点网址.hostname));
+    } catch (错误) { return false; }
+  });
   if (最终链接列表.length === 0) {
-    const 错误备注 = "所有节点获取失败";
-    const 协议484 = atob('dmxlc3M=');
-    const 错误链接 = `${协议484}://00000000-0000-0000-0000-000000000000@127.0.0.1:80?encryption=none&security=none&type=ws&host=error.com&path=%2F#${encodeURIComponent(错误备注)}`;
-    最终链接列表.push(错误链接);
+    return new Response('已启用的节点来源未提供有效节点，请检查来源开关、优选列表和源服务后重试。', {
+      status: 503,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }
+    });
   }
   let 订阅内容;
   let 内容类型483 = 'text/plain; charset=utf-8';
@@ -9253,6 +9261,7 @@ async function 获取优选接口(网址列表, 默认端口 = '443', 超时 = 3
         signal: 控制器.signal
       });
       clearTimeout(超时标识);
+      if (!响应.ok) return;
       let 文本 = '';
       try {
         const 缓冲 = await 响应.arrayBuffer();
