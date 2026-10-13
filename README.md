@@ -8,7 +8,7 @@
 
 ## 部署
 
-1. 下载本分支的 [`_worker.js`](./_worker.js)，上传到 Cloudflare Workers，或在 Pages 使用高级模式部署。
+1. **Pages 部署**：下载 [`pages.zip`](./pages.zip)，在 Cloudflare Pages 的直接上传页面上传这个压缩包。包的根目录只有 `_worker.js`。**Workers 部署**：下载 [`_worker.js`](./_worker.js) 后上传。
 2. 在 Worker 环境变量中设置 `u` 为自己的 UUID，`U` 也支持。
 3. 创建 KV 命名空间，绑定名称填写 `C` 或 `c`。没有 KV 可以生成订阅，保存配置需要 KV。
 4. 给 Worker 绑定可用域名，打开上面的面板，填写域名和同一个 UUID，也可以填写 `d` 设置的自定义路径。
