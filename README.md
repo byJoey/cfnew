@@ -1,5 +1,5 @@
 # CFnew 精简内核
-
+视频教程 https://www.youtube.com/watch?v=EfhHV62CuEU&t=2s
 内核 37,806 字节，较原完整版本减少约 92%。Worker 负责代理转发和 KV 配置。页面、优选列表处理与订阅生成由独立面板提供。
 
 **面板：[https://cfnew.xy.kg/](https://cfnew.xy.kg/)**
