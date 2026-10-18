@@ -1,0 +1,52 @@
+name: 精简内核发行
+
+on:
+  push:
+    tags:
+      - 'v20*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: core-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出标签源码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 确认标签属于精简内核分支
+        run: |
+          git fetch origin core-only
+          git merge-base --is-ancestor HEAD origin/core-only
+
+      - name: 校验内核和部署包
+        run: python3 scripts/package-release.py --output dist --tag "$GITHUB_REF_NAME"
+
+      - name: 上传资产后公开发行
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if gh release view "$GITHUB_REF_NAME" --json isDraft --jq '.isDraft' > dist/release-state.txt 2>/dev/null; then
+            if [ "$(cat dist/release-state.txt)" != "true" ]; then
+              echo "此版本已公开，停止覆盖现有发行。" >&2
+              exit 1
+            fi
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "CFnew 精简内核 $VERSION" \
+              --notes-file "docs/releases/$VERSION.md"
+          else
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+              --title "CFnew 精简内核 $VERSION" \
+              --notes-file "docs/releases/$VERSION.md"
+          fi
+          gh release upload "$GITHUB_REF_NAME" \
+            dist/Pages.zip dist/_worker.js dist/SHA256SUMS.txt --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
