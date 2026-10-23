@@ -14,6 +14,9 @@ let 中转地址 = '';
 // （如 https://bestcf.pages.dev/vps789/top10.txt，会把里面的地址全拉进来）。
 // URL 和 host:port 可以混着填，留空就只用访问域名本身。
 let 优选地址 = '';
+// 家宽链式：落地换成网友共享的家庭宽带（日本、韩国居多），出网就是住宅 IP。
+// 改成 true 后，订阅地址后面加 ?target=vg 就是家宽专属订阅。客户端要求见 README「家宽链式」。
+let 家宽链式 = false;
 // ============================================================================
 
 const 文本解码器 = new TextDecoder();
@@ -57,6 +60,10 @@ export default {
 					case '/':
 						return new Response('hello', { status: 200 });
 					case `/${认证令牌}`: {
+						const 目标 = (网址.searchParams.get('target') || '').toLowerCase();
+						if (目标 === 'vg' || 目标 === 'jk') {
+							return await 处理家宽订阅(认证令牌, request.headers.get('Host'));
+						}
 						const 订阅内容 = await 生成订阅配置(认证令牌, request.headers.get('Host'));
 						return new Response(`${订阅内容}`, {
 							status: 200,
@@ -819,6 +826,9 @@ async function 收集优选地址(主机名) {
 	return 结果;
 }
 
+// CF 的明文端口走 ws（不加密），其余端口走 wss（TLS），据此自动切换
+const 明文端口列表 = [80, 8080, 8880, 2052, 2082, 2086, 2095];
+
 /**
  * 生成订阅内容：为「优选地址」里每个地址各生成一条节点，连接走优选地址，
  * TLS 握手与 WS host 仍用访问域名，最后整体 base64 编码，可直接订阅。
@@ -829,12 +839,10 @@ async function 收集优选地址(主机名) {
 async function 生成订阅配置(认证令牌, 主机名) {
 	const 协议 = 解码64('dmxlc3M=');
 	const 域名 = 主机名 || '';
-	// CF 的明文端口走 ws（不加密），其余端口走 wss（TLS），据此自动切换
-	const 明文端口 = [80, 8080, 8880, 2052, 2082, 2086, 2095];
 	const 地址列表 = await 收集优选地址(域名);
 	const 链接列表 = 地址列表.map((项) => {
 		const 安全地址 = 项.地址.includes(':') ? `[${项.地址}]` : 项.地址;
-		const 是明文 = 明文端口.includes(Number(项.端口));
+		const 是明文 = 明文端口列表.includes(Number(项.端口));
 		// randomized fingerprint may cause TLS compatibility issues with some Xray/uTLS clients.
 		// Use chrome as default for better compatibility.
 		const 安全参数 = 是明文
@@ -845,4 +853,277 @@ async function 生成订阅配置(认证令牌, 主机名) {
 			`#${encodeURIComponent(项.备注)}`;
 	});
 	return btoa(链接列表.join('\n'));
+}
+
+// ============================ 家宽链式（住宅宽带当落地） ============================
+// 跟主版本同一套：本脚本的节点在前面带路，落地换成网友共享出来的家庭宽带。
+// 客户端会把落地节点的整条隧道塞进前置节点里走，握手走 CF 边缘，出网是住宅 IP。
+const 家宽节点源 = 解码64('aHR0cHM6Ly93d3cudnBuZ2F0ZS5uZXQvYXBpL2lwaG9uZS8=');
+const 家宽节点类型 = 解码64('b3BlbnZwbg==');
+const 家宽前置字段 = 解码64('ZGlhbGVyLXByb3h5');
+const 家宽机房前缀 = 解码64('cHVibGljLXZwbg==');
+const 家宽机房网段 = '219.100.37.';
+const 家宽缓存期限 = 30 * 60 * 1000;
+let 家宽缓存 = null;
+let 家宽缓存时间 = 0;
+const 家宽指令正则 = {};
+
+function 引号(值) {
+	return JSON.stringify(String(值 == null ? '' : 值));
+}
+
+function 取家宽指令(配置文本, 指令名) {
+	if (!家宽指令正则[指令名]) 家宽指令正则[指令名] = new RegExp('^[ \\t]*' + 指令名 + '[ \\t]+(.+?)[ \\t]*$', 'm');
+	const 命中 = 配置文本.match(家宽指令正则[指令名]);
+	return 命中 ? 命中[1].trim() : '';
+}
+
+function 取家宽内联块(配置文本, 标签) {
+	const 命中 = 配置文本.match(new RegExp('<' + 标签 + '>([\\s\\S]*?)<\\/' + 标签 + '>'));
+	return 命中 ? 命中[1].trim() : '';
+}
+
+function 缩进证书文本(文本, 空白) {
+	return 文本.split('\n').map((行) => 行.trim()).filter((行) => 行).map((行) => 空白 + 行).join('\n');
+}
+
+// 每条配置解出来约 10KB，但要的几行指令都在前 4KB，证书从 4.7KB 往后才开始，
+// 所以只解开头一段；开头没找到 remote 再整条解。
+const 家宽前段长度 = 6000;
+function 解家宽配置(配置64, 整条 = false) {
+	const 干净 = 配置64.replace(/\s/g, '');
+	if (整条 || 干净.length <= 家宽前段长度) return 解码64(干净);
+	return 解码64(干净.slice(0, 家宽前段长度));
+}
+
+// 清单里 Operator/Message 两列可能自带逗号，只从行首按下标取前几列，配置固定是最后一列
+function 解析家宽清单(原文) {
+	const 候选 = [];
+	for (const 原始行 of 原文.split('\n')) {
+		const 行 = 原始行.trim();
+		if (!行 || 行.charAt(0) === '*' || 行.charAt(0) === '#') continue;
+		const 字段 = 行.split(',');
+		if (字段.length < 15) continue;
+		// 只要住宅宽带：官方自己架的机房服务器剔掉，而且那批容易满员握手失败
+		if ((字段[0] || '').indexOf(家宽机房前缀) === 0) continue;
+		if ((字段[1] || '').indexOf(家宽机房网段) === 0) continue;
+		const 配置64 = 字段[字段.length - 1];
+		if (!配置64 || 配置64.length < 100) continue;
+		候选.push({ 国家: (字段[6] || '').toUpperCase() || 'XX', 速度: parseInt(字段[4], 10) || 0, 配置64 });
+	}
+	// 按速度倒序。挑会话数最少的反而更差：会话少多半是根本连不上，不是空闲
+	候选.sort((甲, 乙) => 乙.速度 - 甲.速度);
+	const 节点列表 = [];
+	let 证书 = null;
+	for (const 项 of 候选) {
+		let 配置文本 = '';
+		try {
+			配置文本 = 解家宽配置(项.配置64);
+			if (!取家宽指令(配置文本, 'remote')) 配置文本 = 解家宽配置(项.配置64, true);
+		} catch (err) {
+			continue;
+		}
+		// 前置只能承载 TCP，UDP 的节点丢掉
+		if ((取家宽指令(配置文本, 'proto') || 'tcp').toLowerCase() !== 'tcp') continue;
+		const 远端 = 取家宽指令(配置文本, 'remote').split(/\s+/);
+		if (!远端[0]) continue;
+		if (!证书) {
+			// 证书全站共用一份，找第一个完整的就够了
+			try {
+				const 全文 = 解家宽配置(项.配置64, true);
+				const 本次证书 = { ca: 取家宽内联块(全文, 'ca'), cert: 取家宽内联块(全文, 'cert'), key: 取家宽内联块(全文, 'key') };
+				if (本次证书.ca && 本次证书.cert && 本次证书.key) 证书 = 本次证书;
+			} catch (err) {}
+			if (!证书) continue;
+		}
+		节点列表.push({
+			国家: 项.国家,
+			地址: 远端[0],
+			端口: parseInt(远端[1], 10) || 443,
+			加密: 取家宽指令(配置文本, 'cipher') || 'AES-128-CBC',
+			摘要: 取家宽指令(配置文本, 'auth') || 'SHA1',
+		});
+	}
+	return { 节点列表, 证书 };
+}
+
+async function 获取家宽节点() {
+	const 现在 = Date.now();
+	if (家宽缓存 && 现在 - 家宽缓存时间 < 家宽缓存期限) return 家宽缓存;
+	// 节点源的 TLS 很老（没有 TLS1.3，ECDHE 只有 CBC 套件），有的运行环境握不上，
+	// 握不上就退回明文再拉一次。清单本身是公开数据。
+	let 原文 = '';
+	let 最后错误 = null;
+	for (const 源 of [家宽节点源, 家宽节点源.replace(/^https:/, 'http:')]) {
+		try {
+			const 响应 = await fetch(源, {
+				headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/plain' },
+				cf: { cacheTtl: 1800, cacheEverything: true },
+			});
+			if (!响应.ok) {
+				最后错误 = new Error('节点源返回 ' + 响应.status);
+				continue;
+			}
+			原文 = await 响应.text();
+			break;
+		} catch (err) {
+			最后错误 = err;
+		}
+	}
+	if (!原文) throw 最后错误 || new Error('节点源没有返回内容');
+	const 结果 = 解析家宽清单(原文);
+	if (!结果.节点列表.length || !结果.证书) throw new Error('没解析出能用的节点');
+	家宽缓存 = 结果;
+	家宽缓存时间 = 现在;
+	return 结果;
+}
+
+// 前置节点：沿用「优选地址」，和普通订阅一样连优选地址、握手用访问域名。
+// 落地隧道的握手特征很明显，套在明文里等于裸奔，所以有 TLS 的就只用 TLS 的。
+function 生成家宽前置(认证令牌, 域名, 地址列表) {
+	const 全部 = 地址列表.map((项) => ({ ...项, 走加密: !明文端口列表.includes(Number(项.端口)) }));
+	const 加密的 = 全部.filter((项) => 项.走加密);
+	const 选用 = 加密的.length ? 加密的 : 全部;
+	const 已用名 = new Set();
+	return 选用.map((项) => {
+		// 不同列表里备注可能撞名，客户端要求名字唯一，撞了就加序号
+		const 基础名 = 项.备注 || `${项.地址}:${项.端口}`;
+		let 名称 = 基础名;
+		for (let 序号 = 2; 已用名.has(名称); 序号++) 名称 = `${基础名} ${序号}`;
+		已用名.add(名称);
+		const 行 = [
+			`  - name: ${引号(名称)}`,
+			`    type: ${解码64('dmxlc3M=')}`,
+			`    server: ${引号(项.地址)}`,
+			`    port: ${Number(项.端口) || 443}`,
+			`    uuid: ${认证令牌}`,
+			'    udp: true',
+			`    tls: ${项.走加密 ? 'true' : 'false'}`,
+			'    client-fingerprint: chrome',
+		];
+		if (项.走加密) 行.push(`    servername: ${引号(域名)}`, '    skip-cert-verify: false');
+		行.push('    network: ws', '    ws-opts:', '      path: "/?ed=2048"', '      headers:', `        Host: ${引号(域名)}`);
+		return { 名称, 文本: 行.join('\n') };
+	});
+}
+
+/**
+ * 家宽专属订阅（YAML）。拉不到节点直接抛错，由调用方回 503。
+ * @param {string} 认证令牌
+ * @param {string | null} 主机名 访问域名
+ * @returns {Promise<string>}
+ */
+async function 生成家宽订阅(认证令牌, 主机名) {
+	const 前置组名 = '\u26a1 CF前置';
+	const 家宽自动 = '\ud83c\udfe0 家宽自动';
+	const 家宽手选 = '\ud83c\udfe0 家宽节点';
+	const 节点选择 = '\ud83d\ude80 节点选择';
+	const 域名 = 主机名 || '';
+	const 前置 = 生成家宽前置(认证令牌, 域名, await 收集优选地址(域名));
+	const 前置名称 = 前置.map((项) => 项.名称);
+	const { 节点列表, 证书 } = await 获取家宽节点();
+	const 国家计数 = {};
+	const 家宽项 = 节点列表.map((节点) => {
+		国家计数[节点.国家] = (国家计数[节点.国家] || 0) + 1;
+		return { ...节点, 名称: '\ud83c\udfe0 ' + 节点.国家 + '-家宽-' + String(国家计数[节点.国家]).padStart(2, '0') };
+	});
+	const 头部 = [
+		'# 家宽订阅：CF 节点带路，落地是住宅宽带',
+		'# 内核要 1.19.25 以上，老内核不认这类节点',
+		'# 节点是网友共享的，掉线很正常，家宽自动会自己往下换',
+		'mixed-port: 7890',
+		'allow-lan: false',
+		'mode: rule',
+		'log-level: info',
+		'ipv6: false',
+		'unified-delay: true',
+		'tcp-concurrent: true',
+		'external-controller: 127.0.0.1:9090',
+		'dns:',
+		'  enable: true',
+		'  ipv6: false',
+		'  enhanced-mode: fake-ip',
+		'  fake-ip-range: 198.18.0.1/16',
+		'  nameserver:',
+		'    - https://223.5.5.5/dns-query',
+		'    - https://1.1.1.1/dns-query',
+		'',
+	];
+	const 节点段 = ['proxies:'];
+	for (const 项 of 前置) 节点段.push(项.文本);
+	家宽项.forEach((节点, 下标) => {
+		const 行 = [
+			`  - name: ${引号(节点.名称)}`,
+			`    type: ${家宽节点类型}`,
+			`    server: ${节点.地址}`,
+			`    port: ${节点.端口}`,
+			'    proto: tcp',
+			'    username: vpn',
+			'    password: vpn',
+			`    cipher: ${节点.加密}`,
+			`    auth: ${节点.摘要}`,
+			'    udp: false',
+			'    handshake-timeout: 30',
+			'    remote-dns-resolve: true',
+			'    dns: [ 8.8.8.8, 1.1.1.1 ]',
+		];
+		// 一个前置都没有就退化成直连落地，订阅至少还能用
+		if (前置名称.length) 行.push(`    ${家宽前置字段}: ${引号(前置组名)}`);
+		// 证书全站同一份，第一个节点定锚点，后面引用，能省下几百 KB
+		if (下标 === 0) {
+			行.push('    ca: &jkca |-', 缩进证书文本(证书.ca, '      '));
+			行.push('    cert: &jkcert |-', 缩进证书文本(证书.cert, '      '));
+			行.push('    key: &jkkey |-', 缩进证书文本(证书.key, '      '));
+		} else {
+			行.push('    ca: *jkca', '    cert: *jkcert', '    key: *jkkey');
+		}
+		节点段.push(行.join('\n'));
+	});
+	const 列出 = (名称列表) => 名称列表.map((名称) => `      - ${引号(名称)}`).join('\n');
+	// 自动组按速度排，决定回落顺序；手选组按国家排，翻起来好找
+	const 按速度 = 家宽项.map((项) => 项.名称);
+	const 按国家 = 家宽项.slice().sort((甲, 乙) => (甲.国家 === 乙.国家 ? 0 : 甲.国家 < 乙.国家 ? -1 : 1)).map((项) => 项.名称);
+	const 分组段 = [解码64('cHJveHktZ3JvdXBzOg==')];
+	if (前置名称.length) {
+		分组段.push(`  - name: ${引号(前置组名)}`, '    type: url-test',
+			'    url: https://www.gstatic.com/generate_204', '    interval: 300', '    tolerance: 50',
+			'    proxies:', 列出(前置名称));
+	}
+	// 全量几十个节点，测一轮就是几十次握手，所以间隔拉长、用到才测
+	分组段.push(`  - name: ${引号(家宽自动)}`, '    type: fallback',
+		'    url: https://www.gstatic.com/generate_204', '    interval: 1800', '    lazy: true',
+		'    proxies:', 列出(按速度));
+	分组段.push(`  - name: ${引号(家宽手选)}`, '    type: select', '    proxies:', 列出(按国家));
+	const 主选 = [家宽自动, 家宽手选].concat(前置名称.length ? [前置组名] : []);
+	分组段.push(`  - name: ${引号(节点选择)}`, '    type: select', '    proxies:', 列出(主选) + '\n      - DIRECT');
+	const 规则段 = [
+		'rules:',
+		'  - GEOIP,LAN,DIRECT,no-resolve',
+		'  - GEOIP,CN,DIRECT,no-resolve',
+		`  - MATCH,${节点选择}`,
+	];
+	return 头部.concat(节点段, [''], 分组段, [''], 规则段, ['']).join('\n');
+}
+
+/**
+ * 家宽订阅入口：没开返回 403；节点源拉不到返回 503，客户端会先用着上一份，不会被空配置覆盖。
+ * @param {string} 认证令牌
+ * @param {string | null} 主机名
+ * @returns {Promise<Response>}
+ */
+async function 处理家宽订阅(认证令牌, 主机名) {
+	const 纯文本头 = { 'Content-Type': 'text/plain;charset=utf-8', 'Cache-Control': 'no-store' };
+	if (!家宽链式) {
+		return new Response('家宽链式没开。把配置区的 家宽链式 改成 true 再部署。', { status: 403, headers: 纯文本头 });
+	}
+	try {
+		const 内容 = await 生成家宽订阅(认证令牌, 主机名);
+		return new Response(内容, {
+			status: 200,
+			headers: { 'Content-Type': 'text/yaml;charset=utf-8', 'Cache-Control': 'no-store' },
+		});
+	} catch (err) {
+		const 原因 = err && err.message ? err.message : String(err);
+		return new Response(`家宽节点暂时拉不到：${原因}\n过几分钟再更新，客户端会先用着上一份。`, { status: 503, headers: 纯文本头 });
+	}
 }
